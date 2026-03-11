@@ -82,7 +82,7 @@ def create_cached_content(api_key, model_name, document_text):
             "parts": [{"text": document_text}],
             "role": "user"
         }],
-        "ttl": "3600s"
+        "ttl": "600s"
     }
     
     req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
@@ -202,32 +202,37 @@ def main():
 
     def run_agent(agent_data):
         agent_name, prompt = agent_data
-        print(f"Generating review from agent: {agent_name}...")
+        print(f"[ ] Started agent: {agent_name}...", flush=True)
         if cache_name:
             response_text = call_gemini_api(api_key, model_name, prompt, cache_name=cache_name)
         else:
             response_text = call_gemini_api(api_key, model_name, prompt, document_text=document_text)
 
         if response_text:
+            print(f"[✓] Completed agent: {agent_name}!", flush=True)
             return f"## Review by {agent_name}\n\n{response_text}"
         else:
+            print(f"[x] Failed agent: {agent_name}!", flush=True)
             return f"## Review by {agent_name}\n\n(Failed to get review from this agent)"
 
     all_reviews = []
     
     # Run agents in parallel using a thread pool
     max_workers = min(10, len(agents))
+    print(f"\nStarting {len(agents)} review agents in parallel...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_agent = {executor.submit(run_agent, agent): agent for agent in agents}
         
-        # Collect results as they complete, but we want to keep them in some order or just append
+        # Collect results as they complete
         for future in concurrent.futures.as_completed(future_to_agent):
+            agent_data = future_to_agent[future]
+            agent_name = agent_data[0]
             try:
                 result = future.result()
                 all_reviews.append(result)
             except Exception as exc:
-                agent_name = future_to_agent[future][0]
+                print(f"[x] Agent '{agent_name}' generated an exception: {exc}", flush=True)
                 all_reviews.append(f"## Review by {agent_name}\n\n(Exception occurred: {exc})")
 
     if cache_name:
