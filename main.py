@@ -1,7 +1,7 @@
 """
 main.py
 
-Orchestrates the entire code review pipeline by calling the necessary scripts 
+Orchestrates the entire code review pipeline by calling the necessary scripts
 in sequence:
 1. load_change.py: Downloads the diff and original files.
 2. analyze_change.py: Generates a summary and identifies extra context files.
@@ -20,7 +20,7 @@ def run_step(command, step_name):
     print(f"--- STEP: {step_name} ---")
     print(f"Running: {' '.join(command)}")
     print(f"{'='*50}")
-    
+
     try:
         # Use check_call to raise an exception if the command fails
         subprocess.check_call(command)

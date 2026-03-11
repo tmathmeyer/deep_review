@@ -1,15 +1,15 @@
 """
 load_change.py
 
-This script interacts with the Gerrit REST API to download the complete context 
-of a specified Gerrit Changelist (CL). Given a Gerrit CL URL or ID, it performs 
+This script interacts with the Gerrit REST API to download the complete context
+of a specified Gerrit Changelist (CL). Given a Gerrit CL URL or ID, it performs
 the following operations:
 
 1. Creates a local directory named after the CL ID.
-2. Fetches and saves commit metadata (author, branch, commit message, Gitiles link, etc.) 
+2. Fetches and saves commit metadata (author, branch, commit message, Gitiles link, etc.)
    into a `commit_info` file.
 3. Downloads the complete diff/patch file with 20 lines of context into `diff.patch`.
-4. Retrieves the original (base/parent=1) contents of all modified files and saves 
+4. Retrieves the original (base/parent=1) contents of all modified files and saves
    them inside the CL directory, preserving their directory structure.
 
 Usage: python3 load_change.py <gerrit-cl-url-or-number>
@@ -79,11 +79,11 @@ def main():
         branch = change_info.get("branch", "UNKNOWN")
         created = change_info.get("created", "UNKNOWN")
         updated = change_info.get("updated", "UNKNOWN")
-        
+
         # If the project contains slashes, they are often URL encoded in the change ID, but the UI URL wants them literal or encoded depending on host.
         # usually /c/project/+/number works
         commit_url = f"https://{host}/c/{project}/+/{numeric_id}"
-        
+
         gitiles_link = ""
         patch_set_num = "UNKNOWN"
         subject = "UNKNOWN"
@@ -94,11 +94,11 @@ def main():
         if current_rev:
             revision_data = change_info.get("revisions", {}).get(current_rev, {})
             patch_set_num = revision_data.get("_number", "UNKNOWN")
-            
+
             commit_data = revision_data.get("commit", {})
             subject = commit_data.get("subject", "UNKNOWN")
             message = commit_data.get("message", "UNKNOWN")
-            
+
             author_data = commit_data.get("author", {})
             author_name = author_data.get("name", "UNKNOWN")
             author_email = author_data.get("email", "UNKNOWN")
@@ -122,7 +122,7 @@ def main():
             f.write(f"Updated: {updated}\n")
             f.write(f"\nSubject: {subject}\n")
             f.write(f"\nCommit Message:\n{message}\n")
-            
+
         print(f"Saved commit info to: {commit_info_path}")
     except Exception as e:
         print(f"Failed to fetch change info: {e}")
