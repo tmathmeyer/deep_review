@@ -14,6 +14,7 @@ from core.change_fetcher import fetch_change, parse_gerrit_url
 from core.context_analyzer import analyze_context
 from core.extra_context_fetcher import fetch_extra_context
 from core.review_engine import run_review
+from core.review_summarizer import summarize_reviews
 
 def print_header(title: str):
     print(f"\n{'='*50}")
@@ -150,9 +151,13 @@ def main():
 
         dashboard.stop()
 
+        # Step 5: Summarize Reviews
+        print_header(f"Consolidating Final Review ({model_name})")
+        summarize_reviews(cl_dir=output_dir, gemini_client=gemini_client, model_name=model_name)
+
         print(f"\n{'+'*50}")
         print(f"SUCCESS: Pipeline complete!")
-        print(f"Check the '{output_dir / 'code_review.md'}' file for the final results.")
+        print(f"Check the '{output_dir / 'final_summary.md'}' file for the final results.")
         print(f"{'+'*50}")
 
     except Exception as e:
