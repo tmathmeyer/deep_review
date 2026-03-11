@@ -8,7 +8,6 @@ import urllib.error
 from typing import Dict, Any, Optional, Tuple
 
 from core.exceptions import GeminiAPIError, ParseError
-from core.models import LLMUsage
 
 class GeminiClient:
     def __init__(self, api_key: str):
@@ -77,10 +76,10 @@ class GeminiClient:
         document_text: Optional[str] = None, 
         cache_name: Optional[str] = None,
         temperature: float = 0.2
-    ) -> Tuple[Optional[str], LLMUsage]:
+    ) -> Optional[str]:
         """
         Generates content from the model. Can use either a cached context or direct document text.
-        Returns a tuple of (response_text, LLMUsage).
+        Returns response_text.
         """
         data = {
             "contents": [{
@@ -107,20 +106,12 @@ class GeminiClient:
                 text = result['candidates'][0]['content']['parts'][0]['text']
             except (KeyError, IndexError):
                 raise ParseError(f"Unexpected response structure: {json.dumps(result)}")
-                
-            # Extract usage stats
-            usage_data = result.get('usageMetadata', {})
-            usage = LLMUsage(
-                prompt_tokens=usage_data.get('promptTokenCount', 0),
-                candidate_tokens=usage_data.get('candidatesTokenCount', 0),
-                total_tokens=usage_data.get('totalTokenCount', 0)
-            )
             
-            return text, usage
+            return text
             
         except GeminiAPIError as e:
             print(f"Error calling Gemini API: {e}")
-            return None, LLMUsage()
+            return None
         except ParseError as e:
             print(f"Error parsing Gemini response: {e}")
-            return None, LLMUsage()
+            return None

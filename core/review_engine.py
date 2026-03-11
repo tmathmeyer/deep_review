@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Callable, Optional
 
 from core.gemini_client import GeminiClient
-from core.models import AgentReview, LLMUsage
+from core.models import AgentReview
 from core.utils import read_directory_context, save_file
 
 def _run_single_agent(
@@ -26,7 +26,7 @@ def _run_single_agent(
     status_callback(agent_name, "Running")
     
     try:
-        response_text, usage = gemini_client.generate_content(
+        response_text = gemini_client.generate_content(
             model_name=model_name,
             prompt=prompt,
             document_text=document_text if not cache_name else None,
@@ -35,7 +35,7 @@ def _run_single_agent(
         
         if response_text:
             status_callback(agent_name, "Done")
-            return AgentReview(agent_name=agent_name, response_text=response_text, status="Done", usage=usage)
+            return AgentReview(agent_name=agent_name, response_text=response_text, status="Done")
         else:
             status_callback(agent_name, "Failed")
             return AgentReview(agent_name=agent_name, response_text=None, status="Failed", error_message="Empty response")
@@ -123,30 +123,18 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, statu
         gemini_client.delete_cached_content(cache_name)
 
     # 7. Aggregate and save results
-    total_usage = LLMUsage()
     md_output = []
     
     # Sort results to be deterministic
     results.sort(key=lambda x: x.agent_name)
     
     for review in results:
-        total_usage.prompt_tokens += review.usage.prompt_tokens
-        total_usage.candidate_tokens += review.usage.candidate_tokens
-        total_usage.total_tokens += review.usage.total_tokens
-        
         md_output.append(f"## Review by {review.agent_name}")
         if review.status == "Done" and review.response_text:
             md_output.append(review.response_text)
         else:
             md_output.append(f"*(Agent failed to generate review: {review.error_message})*")
             
-    stats_md = "\n## LLM Usage Stats\n"
-    stats_md += f"- **Total Prompt Tokens:** {total_usage.prompt_tokens}\n"
-    stats_md += f"- **Total Candidate Tokens:** {total_usage.candidate_tokens}\n"
-    stats_md += f"- **Total Tokens:** {total_usage.total_tokens}\n"
-    
-    md_output.append(stats_md)
-    
     final_output = "\n\n---\n\n".join(md_output)
     out_file = cl_dir / "code_review.md"
     save_file(out_file, final_output)

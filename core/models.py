@@ -6,12 +6,6 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 @dataclass
-class LLMUsage:
-    prompt_tokens: int = 0
-    candidate_tokens: int = 0
-    total_tokens: int = 0
-
-@dataclass
 class ChangeInfo:
     cl_id: str
     host: str
@@ -38,5 +32,4 @@ class AgentReview:
     agent_name: str
     response_text: Optional[str]
     status: str  # e.g., 'Done', 'Failed'
-    usage: LLMUsage = field(default_factory=LLMUsage)
     error_message: Optional[str] = None

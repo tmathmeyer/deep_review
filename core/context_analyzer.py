@@ -35,7 +35,7 @@ def analyze_context(cl_dir: Path, gemini_client: GeminiClient, model_name: str) 
     print(f"Sending request to Gemini API ({model_name})...")
     
     # We don't cache here because this is a one-off request
-    response_text, usage = gemini_client.generate_content(
+    response_text = gemini_client.generate_content(
         model_name=model_name,
         prompt=prompt,
         document_text=document_text

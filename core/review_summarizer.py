@@ -58,7 +58,7 @@ def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str
 
     print(f"Sending summary request to Gemini API ({model_name})...")
     
-    response_text, usage = gemini_client.generate_content(
+    response_text = gemini_client.generate_content(
         model_name=model_name,
         prompt=prompt,
         document_text=document_text
@@ -72,9 +72,3 @@ def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str
     out_file = cl_dir / "final_summary.md"
     save_file(out_file, response_text)
     print(f"Consolidated summary saved to {out_file}")
-    
-    # Optionally append usage stats for this final phase
-    stats_md = f"\n\n---\n*Summarization Token Usage: {usage.prompt_tokens} Prompt | {usage.candidate_tokens} Generated | {usage.total_tokens} Total*\n"
-    
-    with open(out_file, "a", encoding="utf-8") as f:
-        f.write(stats_md)
