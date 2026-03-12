@@ -7,6 +7,7 @@ import os
 import time
 import threading
 import argparse
+import shutil
 from pathlib import Path
 
 from core.gemini_client import GeminiClient
@@ -110,6 +111,10 @@ def main():
         sys.exit(1)
 
     output_dir = Path(args.out_dir) if args.out_dir else Path(cl_id)
+    if output_dir.exists():
+        print(f"Cleaning up existing directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
     gemini_client = GeminiClient(api_key=api_key)
 
     if args.mock:
@@ -132,6 +137,11 @@ def main():
         if not analysis:
             print("Failed to analyze context. Aborting.")
             sys.exit(1)
+            
+        # Clean up project_tree so it doesn't pollute the review context
+        project_tree_path = output_dir / "project_tree"
+        if project_tree_path.exists():
+            project_tree_path.unlink()
 
         # Step 3: Fetch Extra Context
         print_header("Loading Extra Context")
