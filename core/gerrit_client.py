@@ -90,7 +90,7 @@ class GerritClient:
         endpoint = f"{change_id}/revisions/current/files/{encoded_path}/content?parent=1"
         return self.get_base64_file(endpoint)
 
-    def fetch_gitiles_directory(self, project: str, commit_id: str, dir_path: str, gitiles_commit_url: str = "") -> Dict[str, Any]:
+    def fetch_gitiles_directory(self, project: str, commit_id: str, dir_path: str, gitiles_commit_url: str = "", recursive: bool = False) -> Dict[str, Any]:
         """
         Fetches the contents of a directory using the Gitiles REST API.
         dir_path should be empty string for root, or a path like 'src/main'.
@@ -106,6 +106,9 @@ class GerritClient:
             # Fallback to Gerrit plugin path if no Gitiles link is provided
             encoded_project = urllib.parse.quote(project, safe='')
             url = f"https://{self.host}/plugins/gitiles/{encoded_project}/+/{commit_id}{path_suffix}?format=JSON"
+            
+        if recursive:
+            url += "&recursive=1"
         
 
         req = urllib.request.Request(url)
