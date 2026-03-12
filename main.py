@@ -132,7 +132,7 @@ def main():
 
         # Step 2: Analyze Context
         print_header(f"Analyzing Context ({model_name})")
-        analysis = analyze_context(output_dir, gemini_client, model_name)
+        analysis = analyze_context(output_dir, gemini_client, model_name, agents_dir)
 
         if not analysis:
             print("Failed to analyze context. Aborting.")
