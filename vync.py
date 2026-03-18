@@ -29,7 +29,7 @@ class Vync:
     if self._threaded:
       self._all_done_event.wait()
 
-  def TrackJob(self, name: str, coroutine: Coroutine[None, None, None]):
+  def TrackJob(self, name: str, coroutine: Coroutine[None, None, None], optional: bool = False):
     cr_key = base64.b64encode(name.encode()).decode()
 
     with self._lock:
@@ -44,9 +44,14 @@ class Vync:
           dec = base64.b64decode(cr_key.encode()).decode()
           start = self._active_tasks.get(cr_key, time.time())
           delta = time.time() - start
-          self._finished_tasks.append(
-            (f'\033[91m[ERR]\033[0m {dec} ({type(e).__name__} {e})', delta)
-          )
+          if optional:
+            self._finished_tasks.append(
+              (f'\033[93m[OPT FAIL]\033[0m {dec} ({type(e).__name__} {e})', delta)
+            )
+          else:
+            self._finished_tasks.append(
+              (f'\033[91m[ERR]\033[0m {dec} ({type(e).__name__} {e})', delta)
+            )
       finally:
         self._endTaskInternal(cr_key)
 

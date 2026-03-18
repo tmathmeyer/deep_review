@@ -18,6 +18,7 @@ from core.context_analyzer import analyze_context
 from core.extra_context_fetcher import fetch_extra_context
 from core.review_engine import run_review
 from core.review_summarizer import summarize_reviews
+from core.render import render_markdown
 
 def print_header(title: str):
     print(f"\n{'='*50}")
@@ -123,7 +124,7 @@ def main():
         final_summary = summary_ref[0]
 
         if final_summary:
-            print(f"\n{final_summary}\n")
+            print(f"\n{render_markdown(final_summary)}\n")
 
         print(f"\n{'+'*50}")
         print(f"SUCCESS: Pipeline complete!")

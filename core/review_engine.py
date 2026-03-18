@@ -77,9 +77,13 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agent
                     results.append(AgentReview(agent_name=aname, response_text=response_text, status="Done"))
                 else:
                     results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message="Empty response"))
+                    raise ValueError("Empty response")
             except Exception as e:
-                results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message=str(e)))
-        vync_app.TrackJob(f"Agent: {agent_name}", _run_agent())
+                if not any(r.agent_name == aname for r in results):
+                    results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message=str(e)))
+                raise
+
+        vync_app.TrackJob(f"Agent: {agent_name}", _run_agent(), optional=True)
         
     vync_app.WaitAll()
 
