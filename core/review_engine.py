@@ -17,40 +17,12 @@ COMMON_AGENT_INSTRUCTION = """
 **CRITICAL INSTRUCTION:** You must analyze ONLY the code changes (the lines added or modified in the diff). Do NOT report issues, bugs, or improvements for existing code that was not modified in this changelist, even if it is provided in the context.
 """
 
-def _run_single_agent(
-    agent_name: str,
-    prompt: str,
-    document_text: str,
-    cache_name: Optional[str],
-    gemini_client: GeminiClient,
-    model_name: str,
-    status_callback: Callable[[str, str], None]
-) -> AgentReview:
-    """Worker function to run a single review agent."""
-    status_callback(agent_name, "Running")
-
-    try:
-        response_text = gemini_client.generate_content(
-            model_name=model_name,
-            prompt=prompt,
-            document_text=document_text if not cache_name else None,
-            cache_name=cache_name,
-            timeout=300
-        )
-
-        if response_text:
-            status_callback(agent_name, "Done")
-            return AgentReview(agent_name=agent_name, response_text=response_text, status="Done")
-        else:
-            status_callback(agent_name, "Failed")
-            return AgentReview(agent_name=agent_name, response_text=None, status="Failed", error_message="Empty response")
-
-    except Exception as e:
-        status_callback(agent_name, "Failed")
-        return AgentReview(agent_name=agent_name, response_text=None, status="Failed", error_message=str(e))
 
 
-def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, status_callback: Callable[[str, str, float], None], agents_dir: Path) -> None:
+from vync import Vync
+import asyncio
+
+def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agents_dir: Path, vync_app: Vync) -> None:
     """
     Orchestrates the multi-agent code review process.
     Uses status_callback(agent_name, status, elapsed_time) to report progress to the UI.
@@ -86,43 +58,30 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, statu
     if not cache_name:
         print("Caching failed or unsupported. Falling back to direct API requests...")
 
-    # 4. State tracking for UI callback
-    start_times = {name: time.time() for name, _ in agents}
-
-    def thread_safe_callback(name: str, status: str):
-        elapsed = time.time() - start_times[name]
-        status_callback(name, status, elapsed)
-
-    # 5. Run agents in parallel
     results: List[AgentReview] = []
-    max_workers = min(10, len(agents))
 
-    # Initialize all as Pending for the UI
-    for name, _ in agents:
-        status_callback(name, "Pending", 0.0)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_agent = {
-            executor.submit(
-                _run_single_agent,
-                agent_name,
-                prompt,
-                document_text,
-                cache_name,
-                gemini_client,
-                model_name,
-                thread_safe_callback
-            ): agent_name
-            for agent_name, prompt in agents
-        }
-
-        for future in concurrent.futures.as_completed(future_to_agent):
+    for agent_name, prompt in agents:
+        async def _run_agent(aname=agent_name, aprompt=prompt):
             try:
-                review = future.result()
-                results.append(review)
-            except Exception as exc:
-                agent_name = future_to_agent[future]
-                results.append(AgentReview(agent_name=agent_name, response_text=None, status="Failed", error_message=str(exc)))
+                # Wrap the gemini call since it is synchronous
+                response_text = await asyncio.to_thread(
+                    gemini_client.generate_content,
+                    model_name,
+                    aprompt,
+                    document_text if not cache_name else None,
+                    cache_name,
+                    0.2, # temperature
+                    300 # timeout
+                )
+                if response_text:
+                    results.append(AgentReview(agent_name=aname, response_text=response_text, status="Done"))
+                else:
+                    results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message="Empty response"))
+            except Exception as e:
+                results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message=str(e)))
+        vync_app.TrackJob(f"Agent: {agent_name}", _run_agent())
+        
+    vync_app.WaitAll()
 
     # 6. Cleanup cache
     if cache_name:

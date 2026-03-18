@@ -19,7 +19,10 @@ def parse_gerrit_url(url: str) -> tuple[str, str]:
     else:
         raise ValueError("Could not parse change ID from input.")
 
-def fetch_change(url: str, output_dir: Path) -> ChangeInfo:
+from vync import Vync
+import asyncio
+
+def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
     """
     Fetches change metadata, the patch diff, and the original files 
     for a given Gerrit URL, saving them to output_dir.
@@ -94,13 +97,12 @@ def fetch_change(url: str, output_dir: Path) -> ChangeInfo:
     print(f"Saved commit info to: {output_dir / 'commit_info'}")
 
     # Fetch and save diff
-    print("Fetching complete diff...")
-    patch_bytes = client.fetch_patch_diff(change_id, context_lines=20)
-    save_file(output_dir / "diff.patch", patch_bytes)
-    print(f"Saved complete diff to: {output_dir / 'diff.patch'}")
+    async def _fetch_diff():
+        patch_bytes = await asyncio.to_thread(client.fetch_patch_diff, change_id, 20)
+        save_file(output_dir / "diff.patch", patch_bytes)
+    vync_app.TrackJob("Fetch Diff", _fetch_diff())
 
     # Fetch changed files
-    print("Fetching original file contents...")
     files_data = client.fetch_changed_files(change_id)
     modified_files = []
     
@@ -108,16 +110,18 @@ def fetch_change(url: str, output_dir: Path) -> ChangeInfo:
         if file_path == "/COMMIT_MSG":
             continue
         modified_files.append(file_path)
-        try:
-            original_bytes = client.fetch_original_file(change_id, file_path)
-            save_file(output_dir / file_path, original_bytes)
-            print(f"- Saved: {output_dir / file_path}")
-        except Exception as e:
-            print(f"- Failed to fetch original file '{file_path}' (may be a new file): {e}")
+        
+        async def _fetch_orig(fp=file_path):
+            try:
+                original_bytes = await asyncio.to_thread(client.fetch_original_file, change_id, fp)
+                save_file(output_dir / fp, original_bytes)
+            except Exception as e:
+                pass
+        vync_app.TrackJob(f"Fetch {file_path}", _fetch_orig())
+
+    vync_app.WaitAll()
 
     # Discover and save project tree
-    print("Discovering project tree context...")
-    
     deep_dirs = set()
     for file_path in modified_files:
         parts = file_path.split('/')
@@ -140,43 +144,45 @@ def fetch_change(url: str, output_dir: Path) -> ChangeInfo:
             if entry.get("type") == "tree":
                 shallow_dirs.add(entry.get("name"))
     except Exception as e:
-        print(f"- Warning: Could not fetch root directory for subfolders: {e}")
+        pass
 
-    # Remove deep_dirs from shallow_dirs to avoid duplicate fetches
     shallow_dirs = shallow_dirs - deep_dirs
     shallow_dirs.add("")
 
     for dir_path in sorted(list(shallow_dirs)):
-        print(f"  Fetching shallow directory: '{dir_path}'")
-        try:
-            dir_data = client.fetch_gitiles_directory(project, commit_id, dir_path, gitiles_commit_url=change_info.gitiles_link)
-            entries = dir_data.get("entries", [])
-            for entry in entries:
-                if entry.get("type") == "blob":
-                    file_name = entry.get("name")
-                    full_path = f"{dir_path}/{file_name}" if dir_path else file_name
-                    tree_files.add(full_path)
-        except Exception as e:
-            print(f"- Warning: Could not fetch directory listing for '{dir_path}': {e}")
+        async def _fetch_shallow(dp=dir_path):
+            try:
+                dir_data = await asyncio.to_thread(client.fetch_gitiles_directory, project, commit_id, dp, change_info.gitiles_link)
+                entries = dir_data.get("entries", [])
+                for entry in entries:
+                    if entry.get("type") == "blob":
+                        file_name = entry.get("name")
+                        full_path = f"{dp}/{file_name}" if dp else file_name
+                        tree_files.add(full_path)
+            except Exception as e:
+                pass
+        vync_app.TrackJob(f"List Dir {dir_path}", _fetch_shallow())
             
     for dir_path in sorted(list(deep_dirs)):
         if not dir_path:
             continue
-        print(f"  Fetching deep directory: '{dir_path}'")
-        try:
-            dir_data = client.fetch_gitiles_directory(project, commit_id, dir_path, gitiles_commit_url=change_info.gitiles_link, recursive=True)
-            entries = dir_data.get("entries", [])
-            for entry in entries:
-                if entry.get("type") == "blob":
-                    file_name = entry.get("name")
-                    full_path = f"{dir_path}/{file_name}" if dir_path else file_name
-                    tree_files.add(full_path)
-        except Exception as e:
-            print(f"- Warning: Could not fetch recursive directory listing for '{dir_path}': {e}")
+        async def _fetch_deep(dp=dir_path):
+            try:
+                dir_data = await asyncio.to_thread(client.fetch_gitiles_directory, project, commit_id, dp, change_info.gitiles_link, True)
+                entries = dir_data.get("entries", [])
+                for entry in entries:
+                    if entry.get("type") == "blob":
+                        file_name = entry.get("name")
+                        full_path = f"{dp}/{file_name}" if dp else file_name
+                        tree_files.add(full_path)
+            except Exception as e:
+                pass
+        vync_app.TrackJob(f"List Deep Dir {dir_path}", _fetch_deep())
+
+    vync_app.WaitAll()
 
     if tree_files:
         tree_content = "Project files near the changed files:\n\n" + "\n".join(sorted(list(tree_files))) + "\n"
         save_file(output_dir / "project_tree", tree_content)
-        print(f"Saved project tree context with {len(tree_files)} files to: {output_dir / 'project_tree'}")
 
     return change_info
