@@ -22,7 +22,7 @@ COMMON_AGENT_INSTRUCTION = """
 from vync import Vync
 import asyncio
 
-def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agents_dir: Path, vync_app: Vync) -> None:
+async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agents_dir: Path, vync_app: Vync) -> None:
     """
     Orchestrates the multi-agent code review process.
     Uses status_callback(agent_name, status, elapsed_time) to report progress to the UI.
@@ -53,7 +53,7 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agent
     save_file(cl_dir / "full_context", document_text)
 
     # 3. Create cache
-    cache_name = gemini_client.create_cached_content(model_name, document_text, ttl_seconds=600)
+    cache_name = await gemini_client.create_cached_content(model_name, document_text, ttl_seconds=600)
 
     if not cache_name:
         print("Caching failed or unsupported. Falling back to direct API requests...")
@@ -64,8 +64,7 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agent
         async def _run_agent(aname=agent_name, aprompt=prompt):
             try:
                 # Wrap the gemini call since it is synchronous
-                response_text = await asyncio.to_thread(
-                    gemini_client.generate_content,
+                response_text = await gemini_client.generate_content(
                     model_name,
                     aprompt,
                     document_text if not cache_name else None,
@@ -85,11 +84,13 @@ def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agent
 
         vync_app.TrackJob(f"Agent: {agent_name}", _run_agent(), optional=True)
         
-    vync_app.WaitAll()
+    import base64
+    while any("Agent:" in base64.b64decode(k.encode()).decode() for k in vync_app._active_tasks.keys()):
+        await asyncio.sleep(0.1)
 
     # 6. Cleanup cache
     if cache_name:
-        gemini_client.delete_cached_content(cache_name)
+        await gemini_client.delete_cached_content(cache_name)
 
     # 7. Aggregate and save results
     md_output = []

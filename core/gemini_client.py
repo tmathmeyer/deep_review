@@ -5,6 +5,7 @@ Gemini API client.
 import json
 import urllib.request
 import urllib.error
+import asyncio
 from typing import Dict, Any, Optional, Tuple
 
 from core.exceptions import GeminiAPIError, ParseError
@@ -16,29 +17,32 @@ class GeminiClient:
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
-    def _make_request(self, endpoint: str, data: Optional[Dict[str, Any]] = None, method: str = 'POST', timeout: int = 600) -> Dict[str, Any]:
+    async def _make_request(self, endpoint: str, data: Optional[Dict[str, Any]] = None, method: str = 'POST', timeout: int = 600) -> Dict[str, Any]:
         url = f"{self.base_url}/{endpoint}?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
         
         req_data = json.dumps(data).encode('utf-8') if data else None
         req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
         
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                if response.getcode() == 204: # No content (e.g. for DELETE)
-                    return {}
-                return json.loads(response.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8')
-            raise GeminiAPIError(
-                f"Gemini API HTTP {e.code}: {e.reason}", 
-                status_code=e.code, 
-                details=error_body
-            )
-        except Exception as e:
-            raise GeminiAPIError(f"Failed to communicate with Gemini API: {e}")
+        def _do_request():
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    if response.getcode() == 204: # No content (e.g. for DELETE)
+                        return {}
+                    return json.loads(response.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode('utf-8')
+                raise GeminiAPIError(
+                    f"Gemini API HTTP {e.code}: {e.reason}", 
+                    status_code=e.code, 
+                    details=error_body
+                )
+            except Exception as e:
+                raise GeminiAPIError(f"Failed to communicate with Gemini API: {e}")
 
-    def create_cached_content(self, model_name: str, document_text: str, ttl_seconds: int = 600) -> Optional[str]:
+        return await asyncio.to_thread(_do_request)
+
+    async def create_cached_content(self, model_name: str, document_text: str, ttl_seconds: int = 600) -> Optional[str]:
         """
         Uploads document text to create a cached context.
         Returns the cache name (e.g., 'cachedContents/xyz') or None if it fails.
@@ -53,23 +57,20 @@ class GeminiClient:
         }
         
         try:
-            result = self._make_request("cachedContents", data=data)
+            result = await self._make_request("cachedContents", data=data)
             return result.get('name')
         except GeminiAPIError as e:
-            # We don't want to crash the whole app if caching fails (e.g., context too small)
-            # We will log the error and allow the app to fallback to a direct request.
-            # In a full app, we might use a proper logger here.
             print(f"[Warning] Failed to create cache: {e}")
             return None
 
-    def delete_cached_content(self, cache_name: str) -> None:
+    async def delete_cached_content(self, cache_name: str) -> None:
         """Deletes a cached context by name."""
         try:
-            self._make_request(cache_name, method='DELETE')
+            await self._make_request(cache_name, method='DELETE')
         except GeminiAPIError as e:
             print(f"[Warning] Failed to delete cache {cache_name}: {e}")
 
-    def generate_content(
+    async def generate_content(
         self, 
         model_name: str, 
         prompt: str, 
@@ -100,7 +101,7 @@ class GeminiClient:
         endpoint = f"models/{model_name}:generateContent"
         
         try:
-            result = self._make_request(endpoint, data=data, timeout=timeout)
+            result = await self._make_request(endpoint, data=data, timeout=timeout)
             
             # Extract text
             try:

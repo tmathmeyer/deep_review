@@ -7,7 +7,7 @@ from pathlib import Path
 from core.gemini_client import GeminiClient
 from core.utils import save_file
 
-def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str) -> Optional[str]:
+async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str) -> Optional[str]:
     """
     Reads the diff.patch and code_review.md files, and uses the LLM to deduplicate
     and summarize the findings into a final, consolidated review.
@@ -59,7 +59,7 @@ def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str
 
     print(f"Sending summary request to Gemini API ({model_name})...")
     
-    response_text = gemini_client.generate_content(
+    response_text = await gemini_client.generate_content(
         model_name=model_name,
         prompt=prompt,
         document_text=document_text

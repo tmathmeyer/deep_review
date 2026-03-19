@@ -73,7 +73,7 @@ def main():
         print_header(f"Analyzing Context ({model_name})")
         analysis_ref = [None]
         async def _run_analysis():
-            analysis_ref[0] = await asyncio.to_thread(analyze_context, output_dir, gemini_client, model_name, agents_dir)
+            analysis_ref[0] = await analyze_context(output_dir, gemini_client, model_name, agents_dir)
         vync_app.TrackJob("Analyze Context", _run_analysis())
         vync_app.WaitAll()
         analysis = analysis_ref[0]
@@ -101,26 +101,23 @@ def main():
             print(f"No agents found in {agents_dir.name}. Skipping review.")
             sys.exit(0)
 
-        run_review(
-            cl_dir=output_dir,
-            gemini_client=gemini_client,
-            model_name=model_name,
-            agents_dir=agents_dir,
-            vync_app=vync_app
-        )
+        vync_app.TrackJob("Review Orchestrator", run_review(
+                cl_dir=output_dir,
+                gemini_client=gemini_client,
+                model_name=model_name,
+                agents_dir=agents_dir,
+                vync_app=vync_app
+            ))
+        vync_app.WaitAll()
 
         # Step 5: Summarize Reviews
         print_header(f"Consolidating Final Review ({model_name})")
-        async def _run_summary():
-            return await asyncio.to_thread(summarize_reviews, cl_dir=output_dir, gemini_client=gemini_client, model_name=model_name)
-        
-        # We can just run it synchronously since nothing else is running, but let's track it in Vync
+
         summary_ref = [None]
         async def _track_summary():
-            summary_ref[0] = await _run_summary()
+            summary_ref[0] = await summarize_reviews(cl_dir=output_dir, gemini_client=gemini_client, model_name=model_name)
         vync_app.TrackJob("Summarize Reviews", _track_summary())
         vync_app.WaitAll()
-        
         final_summary = summary_ref[0]
 
         if final_summary:
