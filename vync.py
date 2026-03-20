@@ -15,6 +15,8 @@ class Vync:
     self._stop_event = threading.Event()
     self._all_done_event = threading.Event()
     self._all_done_event.set()
+    self._final_render_event = threading.Event()
+    self._final_render_event.set()
 
     if self._threaded:
       self._loop = asyncio.new_event_loop()
@@ -28,12 +30,14 @@ class Vync:
   def WaitAll(self):
     if self._threaded:
       self._all_done_event.wait()
+      self._final_render_event.wait()
 
   def TrackJob(self, name: str, coroutine: Coroutine[None, None, None], optional: bool = False):
     cr_key = base64.b64encode(name.encode()).decode()
 
     with self._lock:
       self._all_done_event.clear()
+      self._final_render_event.clear()
       self._active_tasks[cr_key] = time.time()
 
     async def _jobLogic():
@@ -77,19 +81,35 @@ class Vync:
 
   def _renderLoop(self):
     last_line_count = 0
+    was_done = False
     while True:
       with self._lock:
-        now = time.time()
-        lines = []
-        for status_name, duration in self._finished_tasks:
-          lines.append(f'{status_name}: {duration:.2f}s')
-        for key, start_time in self._active_tasks.items():
-          name = base64.b64decode(key.encode()).decode()
-          lines.append(f'\033[94m[ACTIVE]\033[0m {name}: {now - start_time:.2f}s')
-        if last_line_count > 0:
-          sys.stdout.write(f'\033[{last_line_count}A')
-        for line in lines:
-          sys.stdout.write(f'\r{line}\033[K\n')
-        last_line_count = len(lines)
-        sys.stdout.flush()
+        is_done = len(self._active_tasks) == 0
+        if is_done and was_done:
+          pass
+        else:
+          now = time.time()
+          lines = []
+          for status_name, duration in self._finished_tasks:
+            lines.append(f'{status_name}: {duration:.2f}s')
+          for key, start_time in self._active_tasks.items():
+            name = base64.b64decode(key.encode()).decode()
+            lines.append(f'\033[94m[ACTIVE]\033[0m {name}: {now - start_time:.2f}s')
+          
+          if last_line_count > 0:
+            sys.stdout.write(f'\033[{last_line_count}A')
+          
+          for line in lines:
+            sys.stdout.write(f'\r{line}\033[K\n')
+            
+          if is_done:
+            last_line_count = 0
+            was_done = True
+            self._finished_tasks.clear()
+            self._final_render_event.set()
+          else:
+            last_line_count = len(lines)
+            was_done = False
+            
+          sys.stdout.flush()
       time.sleep(0.1)
