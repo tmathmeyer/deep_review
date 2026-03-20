@@ -17,6 +17,7 @@ class Vync:
     self._all_done_event.set()
     self._final_render_event = threading.Event()
     self._final_render_event.set()
+    self._was_done = True
 
     if self._threaded:
       self._loop = asyncio.new_event_loop()
@@ -38,6 +39,7 @@ class Vync:
     with self._lock:
       self._all_done_event.clear()
       self._final_render_event.clear()
+      self._was_done = False
       self._active_tasks[cr_key] = time.time()
 
     async def _jobLogic():
@@ -64,6 +66,24 @@ class Vync:
     else:
       self._loop.run_until_complete(_jobLogic())
 
+  def TrackAndAwait(self, name: str, coroutine: Coroutine):
+    result_ref = [None]
+    exception_ref = [None]
+
+    async def _wrapper():
+      try:
+        result_ref[0] = await coroutine
+      except Exception as e:
+        exception_ref[0] = e
+        raise
+
+    self.TrackJob(name, _wrapper())
+    self.WaitAll()
+
+    if exception_ref[0]:
+      raise exception_ref[0]
+    return result_ref[0]
+
   def _runSharedLoop(self):
     asyncio.set_event_loop(self._loop)
     self._loop.run_forever()
@@ -81,11 +101,10 @@ class Vync:
 
   def _renderLoop(self):
     last_line_count = 0
-    was_done = False
     while True:
       with self._lock:
         is_done = len(self._active_tasks) == 0
-        if is_done and was_done:
+        if is_done and self._was_done:
           pass
         else:
           now = time.time()
@@ -104,12 +123,12 @@ class Vync:
             
           if is_done:
             last_line_count = 0
-            was_done = True
+            self._was_done = True
             self._finished_tasks.clear()
             self._final_render_event.set()
           else:
             last_line_count = len(lines)
-            was_done = False
+            self._was_done = False
             
           sys.stdout.flush()
       time.sleep(0.1)

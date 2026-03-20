@@ -4,8 +4,6 @@ Command Line Interface and Orchestrator for the Code Review System.
 
 import sys
 import os
-import time
-import threading
 import argparse
 import shutil
 import asyncio
@@ -13,22 +11,18 @@ from pathlib import Path
 from vync import Vync
 
 from core.gemini_client import GeminiClient
-from core.change_fetcher import fetch_change, parse_gerrit_url
-from core.context_analyzer import analyze_context
-from core.extra_context_fetcher import fetch_extra_context
-from core.review_engine import run_review
-from core.review_summarizer import summarize_reviews
-from core.render import render_markdown
+from core.change_fetcher import parse_gerrit_url
+from backends import get_reviewer
 
 def print_header(title: str):
     print(f"\n{'='*50}")
     print(f"--- {title} ---")
-    print(f"{'='*50}")
+    print(f"{ '='*50}")
 
 def main():
     parser = argparse.ArgumentParser(description="Automated LLM-based Code Review System")
-    parser.add_argument("url", help="Gerrit CL URL or numeric ID")
-    parser.add_argument("--out-dir", type=str, help="Directory to save files (defaults to reviews/<CLID>)")
+    parser.add_argument("url", help="Gerrit CL URL, GitHub PR URL, or 'local'")
+    parser.add_argument("--out-dir", type=str, help="Directory to save files (defaults to reviews/<target_id>)")
     parser.add_argument("--model", type=str, default="gemini-3-flash-preview",
                         help="The Gemini model to use for analysis and review (default: gemini-3-flash-preview)")
     parser.add_argument("--mock", action="store_true",
@@ -41,13 +35,16 @@ def main():
         print("Error: GEMINI_API_KEY environment variable not set.")
         sys.exit(1)
 
-    try:
-        _, cl_id = parse_gerrit_url(args.url)
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    target_id = args.url.replace("/", "_").replace(":", "_")
+    if args.url.isdigit() or "googlesource" in args.url:
+        try:
+            _, target_id = parse_gerrit_url(args.url)
+        except:
+            pass
+    elif "github.com/" in args.url and "/pull/" in args.url:
+        target_id = args.url.split("/")[-1]
 
-    output_dir = Path(args.out_dir) if args.out_dir else Path("reviews") / cl_id
+    output_dir = Path(args.out_dir) if args.out_dir else Path("reviews") / target_id
     if output_dir.exists():
         print(f"Cleaning up existing directory: {output_dir}")
         shutil.rmtree(output_dir)
@@ -56,32 +53,38 @@ def main():
 
     if args.mock:
         model_name = "gemini-3.1-flash-lite-preview"
-        agents_dir = Path(__file__).parent / "mock_agents"
         print("Running in MOCK mode (gemini-3.1-flash-lite-preview, mock_agents)")
     else:
         model_name = args.model
-        agents_dir = Path(__file__).parent / "agents"
+
+    try:
+        reviewer = get_reviewer(args.url, gemini_client, model_name, args.mock)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     vync_app = Vync()
 
     try:
         # Step 1: Fetch Change
-        print_header(f"Fetching Change {cl_id}")
-        change_info = fetch_change(args.url, output_dir, vync_app)
+        print_header(f"Fetching Change {args.url}")
+        
+        # We need to run fetch_change synchronously because it might internally use vync_app
+        # and wait. We shouldn't put it in a TrackJob if it does that.
+        change_info = asyncio.run(reviewer.fetch_change(args.url, output_dir, vync_app))
+
+        if not change_info:
+            print("Failed to fetch change info. Aborting.")
+            sys.exit(1)
 
         # Step 2: Analyze Context
         print_header(f"Analyzing Context ({model_name})")
-        analysis_ref = [None]
-        async def _run_analysis():
-            analysis_ref[0] = await analyze_context(output_dir, gemini_client, model_name, agents_dir)
-        vync_app.TrackJob("Analyze Context", _run_analysis())
-        vync_app.WaitAll()
-        analysis = analysis_ref[0]
+        analysis = vync_app.TrackAndAwait("Analyze Context", reviewer.perform_analysis(change_info, output_dir, vync_app))
 
         if not analysis:
             print("Failed to analyze context. Aborting.")
             sys.exit(1)
-            
+
         # Clean up project_tree so it doesn't pollute the review context
         project_tree_path = output_dir / "project_tree"
         if project_tree_path.exists():
@@ -89,39 +92,26 @@ def main():
 
         # Step 3: Fetch Extra Context
         print_header("Loading Extra Context")
-        fetch_extra_context(output_dir, change_info, analysis, vync_app)
+        vync_app.TrackAndAwait("Fetch Extra Context", reviewer.deduce_more_context(change_info, output_dir, vync_app))
 
         # Step 4: Perform Review
         print_header(f"Performing Multi-Agent Code Review ({model_name})")
 
-        # Count agents to allocate dashboard space
+        agents_dir = reviewer.get_reviewer_agents_dir()
         num_agents = len(list(agents_dir.glob("*.md"))) if agents_dir.is_dir() else 0
 
         if num_agents == 0:
             print(f"No agents found in {agents_dir.name}. Skipping review.")
             sys.exit(0)
 
-        vync_app.TrackJob("Review Orchestrator", run_review(
-                cl_dir=output_dir,
-                gemini_client=gemini_client,
-                model_name=model_name,
-                agents_dir=agents_dir,
-                vync_app=vync_app
-            ))
-        vync_app.WaitAll()
+        vync_app.TrackAndAwait("Review Orchestrator", reviewer.run_review_agents(change_info, output_dir, vync_app))
 
         # Step 5: Summarize Reviews
         print_header(f"Consolidating Final Review ({model_name})")
-
-        summary_ref = [None]
-        async def _track_summary():
-            summary_ref[0] = await summarize_reviews(cl_dir=output_dir, gemini_client=gemini_client, model_name=model_name)
-        vync_app.TrackJob("Summarize Reviews", _track_summary())
-        vync_app.WaitAll()
-        final_summary = summary_ref[0]
+        final_summary = vync_app.TrackAndAwait("Summarize Reviews", reviewer.coalesce_reviews(change_info, output_dir, vync_app))
 
         if final_summary:
-            print(f"\n{render_markdown(final_summary)}\n")
+            print(f"\n{reviewer.render_reviews(final_summary, output_dir)}\n")
 
         print(f"\n{'+'*50}")
         print(f"SUCCESS: Pipeline complete!")
@@ -131,6 +121,8 @@ def main():
 
     except Exception as e:
         print(f"\n[!] Pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
