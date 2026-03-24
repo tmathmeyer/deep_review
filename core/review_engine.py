@@ -18,11 +18,17 @@ COMMON_AGENT_INSTRUCTION = """
 """
 
 
-
 from vync import Vync
 import asyncio
 
-async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str, agents_dir: Path, vync_app: Vync) -> None:
+
+async def run_review(
+    cl_dir: Path,
+    gemini_client: GeminiClient,
+    model_name: str,
+    agents_dir: Path,
+    vync_app: Vync,
+) -> None:
     """
     Orchestrates the multi-agent code review process.
     Uses status_callback(agent_name, status, elapsed_time) to report progress to the UI.
@@ -53,7 +59,9 @@ async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str,
     save_file(cl_dir / "full_context", document_text)
 
     # 3. Create cache
-    cache_name = await gemini_client.create_cached_content(model_name, document_text, ttl_seconds=600)
+    cache_name = await gemini_client.create_cached_content(
+        model_name, document_text, ttl_seconds=600
+    )
 
     if not cache_name:
         print("Caching failed or unsupported. Falling back to direct API requests...")
@@ -61,6 +69,7 @@ async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str,
     results: List[AgentReview] = []
 
     for agent_name, prompt in agents:
+
         async def _run_agent(aname=agent_name, aprompt=prompt):
             try:
                 # Wrap the gemini call since it is synchronous
@@ -69,23 +78,45 @@ async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str,
                     aprompt,
                     document_text if not cache_name else None,
                     cache_name,
-                    0.2, # temperature
-                    300 # timeout
+                    0.2,  # temperature
+                    300,  # timeout
                 )
                 if response_text:
-                    results.append(AgentReview(agent_name=aname, response_text=response_text, status="Done"))
+                    results.append(
+                        AgentReview(
+                            agent_name=aname, response_text=response_text, status="Done"
+                        )
+                    )
                 else:
-                    results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message="Empty response"))
+                    results.append(
+                        AgentReview(
+                            agent_name=aname,
+                            response_text=None,
+                            status="Failed",
+                            error_message="Empty response",
+                        )
+                    )
                     raise ValueError("Empty response")
             except Exception as e:
                 if not any(r.agent_name == aname for r in results):
-                    results.append(AgentReview(agent_name=aname, response_text=None, status="Failed", error_message=str(e)))
+                    results.append(
+                        AgentReview(
+                            agent_name=aname,
+                            response_text=None,
+                            status="Failed",
+                            error_message=str(e),
+                        )
+                    )
                 raise
 
         vync_app.TrackJob(f"Agent: {agent_name}", _run_agent(), optional=True)
-        
+
     import base64
-    while any("Agent:" in base64.b64decode(k.encode()).decode() for k in vync_app._active_tasks.keys()):
+
+    while any(
+        "Agent:" in base64.b64decode(k.encode()).decode()
+        for k in vync_app._active_tasks.keys()
+    ):
         await asyncio.sleep(0.1)
 
     # 6. Cleanup cache
@@ -103,7 +134,9 @@ async def run_review(cl_dir: Path, gemini_client: GeminiClient, model_name: str,
         if review.status == "Done" and review.response_text:
             md_output.append(review.response_text)
         else:
-            md_output.append(f"*(Agent failed to generate review: {review.error_message})*")
+            md_output.append(
+                f"*(Agent failed to generate review: {review.error_message})*"
+            )
 
     final_output = "\n\n---\n\n".join(md_output)
     out_file = cl_dir / "code_review.md"

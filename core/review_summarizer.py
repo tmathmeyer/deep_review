@@ -7,7 +7,10 @@ from pathlib import Path
 from core.gemini_client import GeminiClient
 from core.utils import save_file
 
-async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_name: str) -> Optional[str]:
+
+async def summarize_reviews(
+    cl_dir: Path, gemini_client: GeminiClient, model_name: str
+) -> Optional[str]:
     """
     Reads the diff.patch and code_review.md files, and uses the LLM to deduplicate
     and summarize the findings into a final, consolidated review.
@@ -16,7 +19,7 @@ async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_nam
     review_path = cl_dir / "code_review.md"
     summary_path = cl_dir / "summary"
     commit_info_path = cl_dir / "commit_info"
-    
+
     if not diff_path.exists() or not review_path.exists():
         print("Error: Missing diff.patch or code_review.md for summarization.")
         return None
@@ -27,12 +30,12 @@ async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_nam
             diff_text = f.read()
         with open(review_path, "r", encoding="utf-8") as f:
             review_text = f.read()
-            
+
         summary_text = ""
         if summary_path.exists():
             with open(summary_path, "r", encoding="utf-8") as f:
                 summary_text = f.read()
-                
+
         commit_info_text = ""
         if commit_info_path.exists():
             with open(commit_info_path, "r", encoding="utf-8") as f:
@@ -58,11 +61,9 @@ async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_nam
     )
 
     print(f"Sending summary request to Gemini API ({model_name})...")
-    
+
     response_text = await gemini_client.generate_content(
-        model_name=model_name,
-        prompt=prompt,
-        document_text=document_text
+        model_name=model_name, prompt=prompt, document_text=document_text
     )
 
     if not response_text:
@@ -73,5 +74,5 @@ async def summarize_reviews(cl_dir: Path, gemini_client: GeminiClient, model_nam
     out_file = cl_dir / "final_summary.md"
     save_file(out_file, response_text)
     print(f"Consolidated summary saved to {out_file}")
-    
+
     return response_text

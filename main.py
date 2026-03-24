@@ -14,19 +14,34 @@ from core.gemini_client import GeminiClient
 from core.change_fetcher import parse_gerrit_url
 from backends import get_reviewer
 
+
 def print_header(title: str):
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"--- {title} ---")
-    print(f"{ '='*50}")
+    print(f"{'=' * 50}")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Automated LLM-based Code Review System")
+    parser = argparse.ArgumentParser(
+        description="Automated LLM-based Code Review System"
+    )
     parser.add_argument("url", help="Gerrit CL URL, GitHub PR URL, or 'local'")
-    parser.add_argument("--out-dir", type=str, help="Directory to save files (defaults to reviews/<target_id>)")
-    parser.add_argument("--model", type=str, default="gemini-3-flash-preview",
-                        help="The Gemini model to use for analysis and review (default: gemini-3-flash-preview)")
-    parser.add_argument("--mock", action="store_true",
-                        help="Use mock agents and gemini-3.1-flash-lite-preview for faster testing")
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        help="Directory to save files (defaults to reviews/<target_id>)",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gemini-3-flash-preview",
+        help="The Gemini model to use for analysis and review (default: gemini-3-flash-preview)",
+    )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock agents and gemini-3.1-flash-lite-preview for faster testing",
+    )
 
     args = parser.parse_args()
 
@@ -68,7 +83,7 @@ def main():
     try:
         # Step 1: Fetch Change
         print_header(f"Fetching Change {args.url}")
-        
+
         # We need to run fetch_change synchronously because it might internally use vync_app
         # and wait. We shouldn't put it in a TrackJob if it does that.
         change_info = asyncio.run(reviewer.fetch_change(args.url, output_dir, vync_app))
@@ -79,7 +94,10 @@ def main():
 
         # Step 2: Analyze Context
         print_header(f"Analyzing Context ({model_name})")
-        analysis = vync_app.TrackAndAwait("Analyze Context", reviewer.perform_analysis(change_info, output_dir, vync_app))
+        analysis = vync_app.TrackAndAwait(
+            "Analyze Context",
+            reviewer.perform_analysis(change_info, output_dir, vync_app),
+        )
 
         if not analysis:
             print("Failed to analyze context. Aborting.")
@@ -92,7 +110,10 @@ def main():
 
         # Step 3: Fetch Extra Context
         print_header("Loading Extra Context")
-        vync_app.TrackAndAwait("Fetch Extra Context", reviewer.deduce_more_context(change_info, output_dir, vync_app))
+        vync_app.TrackAndAwait(
+            "Fetch Extra Context",
+            reviewer.deduce_more_context(change_info, output_dir, vync_app),
+        )
 
         # Step 4: Perform Review
         print_header(f"Performing Multi-Agent Code Review ({model_name})")
@@ -104,26 +125,38 @@ def main():
             print(f"No agents found in {agents_dir.name}. Skipping review.")
             sys.exit(0)
 
-        vync_app.TrackAndAwait("Review Orchestrator", reviewer.run_review_agents(change_info, output_dir, vync_app))
+        vync_app.TrackAndAwait(
+            "Review Orchestrator",
+            reviewer.run_review_agents(change_info, output_dir, vync_app),
+        )
 
         # Step 5: Summarize Reviews
         print_header(f"Consolidating Final Review ({model_name})")
-        final_summary = vync_app.TrackAndAwait("Summarize Reviews", reviewer.coalesce_reviews(change_info, output_dir, vync_app))
+        final_summary = vync_app.TrackAndAwait(
+            "Summarize Reviews",
+            reviewer.coalesce_reviews(change_info, output_dir, vync_app),
+        )
 
         if final_summary:
             print(f"\n{reviewer.render_reviews(final_summary, output_dir)}\n")
 
-        print(f"\n{'+'*50}")
+        print(f"\n{'+' * 50}")
         print(f"SUCCESS: Pipeline complete!")
-        print(f"Check the '{output_dir / 'final_summary.md'}' file for the final summary.")
-        print(f"Check the '{output_dir / 'code_review.md'}' file for the full detailed review.")
-        print(f"{'+'*50}")
+        print(
+            f"Check the '{output_dir / 'final_summary.md'}' file for the final summary."
+        )
+        print(
+            f"Check the '{output_dir / 'code_review.md'}' file for the full detailed review."
+        )
+        print(f"{'+' * 50}")
 
     except Exception as e:
         print(f"\n[!] Pipeline failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

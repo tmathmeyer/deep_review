@@ -1,0 +1,7 @@
+[project]
+name = "deep_review"
+version = "0.1.0"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

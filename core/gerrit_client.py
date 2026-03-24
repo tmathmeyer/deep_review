@@ -12,6 +12,7 @@ from typing import Dict, Any
 
 from core.exceptions import GerritAPIError, ParseError
 
+
 class GerritClient:
     def __init__(self, host: str):
         """
@@ -33,12 +34,16 @@ class GerritClient:
                     return response.read()
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
-                raise GerritAPIError(f"HTTP Error {e.code} fetching {url}: {e.reason}", status_code=e.code, details=e.reason)
+                raise GerritAPIError(
+                    f"HTTP Error {e.code} fetching {url}: {e.reason}",
+                    status_code=e.code,
+                    details=e.reason,
+                )
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 raise GerritAPIError(f"Failed to fetch {url}: {e}")
 
@@ -49,7 +54,7 @@ class GerritClient:
         """
         raw_bytes = self._make_request(endpoint)
         try:
-            data_str = raw_bytes.decode('utf-8')
+            data_str = raw_bytes.decode("utf-8")
             if data_str.startswith(")]}'"):
                 data_str = data_str[4:]
             return json.loads(data_str)
@@ -86,30 +91,38 @@ class GerritClient:
 
     def fetch_original_file(self, change_id: str, file_path: str) -> bytes:
         """Downloads the original file content from the base commit (parent=1)."""
-        encoded_path = urllib.parse.quote(file_path, safe='')
-        endpoint = f"{change_id}/revisions/current/files/{encoded_path}/content?parent=1"
+        encoded_path = urllib.parse.quote(file_path, safe="")
+        endpoint = (
+            f"{change_id}/revisions/current/files/{encoded_path}/content?parent=1"
+        )
         return self.get_base64_file(endpoint)
 
-    def fetch_gitiles_directory(self, project: str, commit_id: str, dir_path: str, gitiles_commit_url: str = "", recursive: bool = False) -> Dict[str, Any]:
+    def fetch_gitiles_directory(
+        self,
+        project: str,
+        commit_id: str,
+        dir_path: str,
+        gitiles_commit_url: str = "",
+        recursive: bool = False,
+    ) -> Dict[str, Any]:
         """
         Fetches the contents of a directory using the Gitiles REST API.
         dir_path should be empty string for root, or a path like 'src/main'.
         """
-        encoded_dir = urllib.parse.quote(dir_path, safe='') if dir_path else ""
-        # Important: Gitiles requires a trailing slash to return the directory entries 
+        encoded_dir = urllib.parse.quote(dir_path, safe="") if dir_path else ""
+        # Important: Gitiles requires a trailing slash to return the directory entries
         # instead of just returning the commit info for the root.
         path_suffix = f"/{encoded_dir}/" if encoded_dir else "/"
-        
+
         if gitiles_commit_url:
             url = f"{gitiles_commit_url.rstrip('/')}{path_suffix}?format=JSON"
         else:
             # Fallback to Gerrit plugin path if no Gitiles link is provided
-            encoded_project = urllib.parse.quote(project, safe='')
+            encoded_project = urllib.parse.quote(project, safe="")
             url = f"https://{self.host}/plugins/gitiles/{encoded_project}/+/{commit_id}{path_suffix}?format=JSON"
-            
+
         if recursive:
             url += "&recursive=1"
-        
 
         req = urllib.request.Request(url)
         max_retries = 5
@@ -117,7 +130,7 @@ class GerritClient:
             try:
                 with urllib.request.urlopen(req) as response:
                     raw_bytes = response.read()
-                    data_str = raw_bytes.decode('utf-8')
+                    data_str = raw_bytes.decode("utf-8")
                     if data_str.startswith(")]}'"):
                         data_str = data_str[4:]
                     return json.loads(data_str)
@@ -126,13 +139,15 @@ class GerritClient:
                 if e.code == 404:
                     return {"entries": []}
                 if e.code == 429 and attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
-                raise GerritAPIError(f"HTTP Error {e.code} fetching {url}: {e.reason}", status_code=e.code, details=e.reason)
+                raise GerritAPIError(
+                    f"HTTP Error {e.code} fetching {url}: {e.reason}",
+                    status_code=e.code,
+                    details=e.reason,
+                )
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                     continue
                 raise GerritAPIError(f"Failed to fetch {url}: {e}")
-
-

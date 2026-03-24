@@ -4,7 +4,9 @@ with open("main.py", "r") as f:
     text = f.read()
 
 # Replace step 5
-regex = re.compile(r'        # Step 5: Summarize Reviews.*?(?=        final_summary)', re.DOTALL)
+regex = re.compile(
+    r"        # Step 5: Summarize Reviews.*?(?=        final_summary)", re.DOTALL
+)
 new_step_5 = """        # Step 5: Summarize Reviews
         print_header(f"Consolidating Final Review ({model_name})")
         

@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Tuple
 
 from core.exceptions import GeminiAPIError, ParseError
 
+
 class GeminiClient:
     def __init__(self, api_key: str):
         if not api_key:
@@ -17,48 +18,53 @@ class GeminiClient:
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
-    async def _make_request(self, endpoint: str, data: Optional[Dict[str, Any]] = None, method: str = 'POST', timeout: int = 600) -> Dict[str, Any]:
+    async def _make_request(
+        self,
+        endpoint: str,
+        data: Optional[Dict[str, Any]] = None,
+        method: str = "POST",
+        timeout: int = 600,
+    ) -> Dict[str, Any]:
         url = f"{self.base_url}/{endpoint}?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
-        
-        req_data = json.dumps(data).encode('utf-8') if data else None
+
+        req_data = json.dumps(data).encode("utf-8") if data else None
         req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
-        
+
         def _do_request():
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as response:
-                    if response.getcode() == 204: # No content (e.g. for DELETE)
+                    if response.getcode() == 204:  # No content (e.g. for DELETE)
                         return {}
-                    return json.loads(response.read().decode('utf-8'))
+                    return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
-                error_body = e.read().decode('utf-8')
+                error_body = e.read().decode("utf-8")
                 raise GeminiAPIError(
-                    f"Gemini API HTTP {e.code}: {e.reason}", 
-                    status_code=e.code, 
-                    details=error_body
+                    f"Gemini API HTTP {e.code}: {e.reason}",
+                    status_code=e.code,
+                    details=error_body,
                 )
             except Exception as e:
                 raise GeminiAPIError(f"Failed to communicate with Gemini API: {e}")
 
         return await asyncio.to_thread(_do_request)
 
-    async def create_cached_content(self, model_name: str, document_text: str, ttl_seconds: int = 600) -> Optional[str]:
+    async def create_cached_content(
+        self, model_name: str, document_text: str, ttl_seconds: int = 600
+    ) -> Optional[str]:
         """
         Uploads document text to create a cached context.
         Returns the cache name (e.g., 'cachedContents/xyz') or None if it fails.
         """
         data = {
             "model": f"models/{model_name}",
-            "contents": [{
-                "parts": [{"text": document_text}],
-                "role": "user"
-            }],
-            "ttl": f"{ttl_seconds}s"
+            "contents": [{"parts": [{"text": document_text}], "role": "user"}],
+            "ttl": f"{ttl_seconds}s",
         }
-        
+
         try:
             result = await self._make_request("cachedContents", data=data)
-            return result.get('name')
+            return result.get("name")
         except GeminiAPIError as e:
             print(f"[Warning] Failed to create cache: {e}")
             return None
@@ -66,51 +72,46 @@ class GeminiClient:
     async def delete_cached_content(self, cache_name: str) -> None:
         """Deletes a cached context by name."""
         try:
-            await self._make_request(cache_name, method='DELETE')
+            await self._make_request(cache_name, method="DELETE")
         except GeminiAPIError as e:
             print(f"[Warning] Failed to delete cache {cache_name}: {e}")
 
     async def generate_content(
-        self, 
-        model_name: str, 
-        prompt: str, 
-        document_text: Optional[str] = None, 
+        self,
+        model_name: str,
+        prompt: str,
+        document_text: Optional[str] = None,
         cache_name: Optional[str] = None,
         temperature: float = 0.2,
-        timeout: int = 600
+        timeout: int = 600,
     ) -> Optional[str]:
         """
         Generates content from the model. Can use either a cached context or direct document text.
         Returns response_text.
         """
         data = {
-            "contents": [{
-                "parts": [{"text": prompt}],
-                "role": "user"
-            }],
-            "generationConfig": {
-                "temperature": temperature
-            }
+            "contents": [{"parts": [{"text": prompt}], "role": "user"}],
+            "generationConfig": {"temperature": temperature},
         }
-        
+
         if cache_name:
             data["cachedContent"] = cache_name
         elif document_text:
             data["contents"][0]["parts"].insert(0, {"text": document_text + "\n\n"})
-            
+
         endpoint = f"models/{model_name}:generateContent"
-        
+
         try:
             result = await self._make_request(endpoint, data=data, timeout=timeout)
-            
+
             # Extract text
             try:
-                text = result['candidates'][0]['content']['parts'][0]['text']
+                text = result["candidates"][0]["content"]["parts"][0]["text"]
             except (KeyError, IndexError):
                 raise ParseError(f"Unexpected response structure: {json.dumps(result)}")
-            
+
             return text
-            
+
         except GeminiAPIError as e:
             print(f"Error calling Gemini API: {e}")
             return None

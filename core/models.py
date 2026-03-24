@@ -5,6 +5,7 @@ Data structures representing the inputs and outputs of the review system.
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+
 @dataclass
 class ChangeInfo:
     cl_id: str
@@ -22,10 +23,12 @@ class ChangeInfo:
     commit_url: str = ""
     gitiles_link: str = ""
 
+
 @dataclass
 class AnalysisResult:
     summary: str
     extra_context_files: List[str] = field(default_factory=list)
+
 
 @dataclass
 class AgentReview:
