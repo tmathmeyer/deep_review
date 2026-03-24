@@ -66,9 +66,17 @@ class GitHubReviewer(Reviewer):
                 diff_req = urllib.request.Request(
                     diff_url, headers={"User-Agent": "deep-review"}
                 )
-                with urllib.request.urlopen(diff_req) as diff_resp:
-                    diff_bytes = diff_resp.read()
+                try:
+                    # Use asyncio.to_thread for blocking urllib call
+                    def _do_fetch_diff():
+                        with urllib.request.urlopen(diff_req, timeout=30.0) as diff_resp:
+                            return diff_resp.read()
+                    
+                    diff_bytes = await asyncio.to_thread(_do_fetch_diff)
                     save_file(output_dir / "diff.patch", diff_bytes)
+                except Exception as e:
+                    print(f"Error fetching PR diff: {e}")
+                    raise
 
         vync_app.TrackJob("Fetch PR Diff", _fetch_diff())
 
@@ -85,27 +93,43 @@ class GitHubReviewer(Reviewer):
                 },
             )
             try:
-                with urllib.request.urlopen(files_req) as files_resp:
-                    files_data = json.loads(files_resp.read().decode())
+                def _do_fetch_files_list():
+                    with urllib.request.urlopen(files_req, timeout=30.0) as files_resp:
+                        return json.loads(files_resp.read().decode())
+                
+                files_data = await asyncio.to_thread(_do_fetch_files_list)
 
-                for file_info in files_data:
-                    fpath = file_info.get("filename")
-                    raw_url = file_info.get("raw_url")
-                    if raw_url:
-                        # Fetch original/raw file
-                        file_req = urllib.request.Request(
-                            raw_url, headers={"User-Agent": "deep-review"}
-                        )
-                        try:
-                            with urllib.request.urlopen(file_req) as raw_resp:
-                                save_file(output_dir / fpath, raw_resp.read())
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                # Fetch files concurrently with a limit
+                semaphore = asyncio.Semaphore(5)
+
+                async def _fetch_one_file(file_info):
+                    async with semaphore:
+                        fpath = file_info.get("filename")
+                        raw_url = file_info.get("raw_url")
+                        if raw_url:
+                            # Fetch original/raw file
+                            file_req = urllib.request.Request(
+                                raw_url, headers={"User-Agent": "deep-review"}
+                            )
+                            try:
+                                def _do_fetch_one():
+                                    with urllib.request.urlopen(file_req, timeout=30.0) as raw_resp:
+                                        return raw_resp.read()
+                                
+                                file_content = await asyncio.to_thread(_do_fetch_one)
+                                save_file(output_dir / fpath, file_content)
+                            except Exception as e:
+                                print(f"Error fetching file {fpath}: {e}")
+                                # We don't raise here to allow other files to continue, 
+                                # but we've logged it.
+
+                await asyncio.gather(*[_fetch_one_file(f) for f in files_data])
+            except Exception as e:
+                print(f"Error listing PR files: {e}")
+                raise
 
         vync_app.TrackJob("Fetch PR Files", _fetch_files())
-        vync_app.WaitAll()
+        await vync_app.await_all()
 
         return change_info
 

@@ -21,7 +21,7 @@ def print_header(title: str):
     print(f"{'=' * 50}")
 
 
-def main():
+async def main_async():
     parser = argparse.ArgumentParser(
         description="Automated LLM-based Code Review System"
     )
@@ -54,7 +54,7 @@ def main():
     if args.url.isdigit() or "googlesource" in args.url:
         try:
             _, target_id = parse_gerrit_url(args.url)
-        except:
+        except Exception:
             pass
     elif "github.com/" in args.url and "/pull/" in args.url:
         target_id = args.url.split("/")[-1]
@@ -84,9 +84,7 @@ def main():
         # Step 1: Fetch Change
         print_header(f"Fetching Change {args.url}")
 
-        # We need to run fetch_change synchronously because it might internally use vync_app
-        # and wait. We shouldn't put it in a TrackJob if it does that.
-        change_info = asyncio.run(reviewer.fetch_change(args.url, output_dir, vync_app))
+        change_info = await reviewer.fetch_change(args.url, output_dir, vync_app)
 
         if not change_info:
             print("Failed to fetch change info. Aborting.")
@@ -94,7 +92,7 @@ def main():
 
         # Step 2: Analyze Context
         print_header(f"Analyzing Context ({model_name})")
-        analysis = vync_app.TrackAndAwait(
+        analysis = await vync_app.TrackAndAwait(
             "Analyze Context",
             reviewer.perform_analysis(change_info, output_dir, vync_app),
         )
@@ -110,7 +108,7 @@ def main():
 
         # Step 3: Fetch Extra Context
         print_header("Loading Extra Context")
-        vync_app.TrackAndAwait(
+        await vync_app.TrackAndAwait(
             "Fetch Extra Context",
             reviewer.deduce_more_context(change_info, output_dir, vync_app),
         )
@@ -125,14 +123,14 @@ def main():
             print(f"No agents found in {agents_dir.name}. Skipping review.")
             sys.exit(0)
 
-        vync_app.TrackAndAwait(
+        await vync_app.TrackAndAwait(
             "Review Orchestrator",
             reviewer.run_review_agents(change_info, output_dir, vync_app),
         )
 
         # Step 5: Summarize Reviews
         print_header(f"Consolidating Final Review ({model_name})")
-        final_summary = vync_app.TrackAndAwait(
+        final_summary = await vync_app.TrackAndAwait(
             "Summarize Reviews",
             reviewer.coalesce_reviews(change_info, output_dir, vync_app),
         )
@@ -141,7 +139,7 @@ def main():
             print(f"\n{reviewer.render_reviews(final_summary, output_dir)}\n")
 
         print(f"\n{'+' * 50}")
-        print(f"SUCCESS: Pipeline complete!")
+        print("SUCCESS: Pipeline complete!")
         print(
             f"Check the '{output_dir / 'final_summary.md'}' file for the final summary."
         )
@@ -156,7 +154,9 @@ def main():
 
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        vync_app.stop()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())

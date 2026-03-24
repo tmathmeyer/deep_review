@@ -1,26 +1,30 @@
 import asyncio
 import time
 import threading
-import base64
 import sys
-from typing import Coroutine
+from typing import Coroutine, Any, Dict, List, Tuple
 
 
 class Vync:
     def __init__(self, threaded: bool = True):
         self._threaded = threaded
-        self._active_tasks: dict[str, float] = {}
-        self._finished_tasks: list[tuple[str, float]] = []
+        self._active_tasks: Dict[str, float] = {}
+        self._finished_tasks: List[Tuple[str, float]] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
-        self._all_done_event = threading.Event()
-        self._all_done_event.set()
+        
+        # asyncio.Event must be created in the loop it belongs to.
+        # We'll initialize them later if threaded.
+        self._all_done_event: Any = None 
         self._final_render_event = threading.Event()
         self._final_render_event.set()
         self._was_done = True
 
         if self._threaded:
             self._loop = asyncio.new_event_loop()
+            self._all_done_event_threadsafe = threading.Event()
+            self._all_done_event_threadsafe.set()
+            
             self._loop_thread = threading.Thread(
                 target=self._runSharedLoop, daemon=True
             )
@@ -29,54 +33,77 @@ class Vync:
             self._render_thread.start()
         else:
             self._loop = asyncio.get_event_loop()
+            self._all_done_event = asyncio.Event()
+            self._all_done_event.set()
 
-    def WaitAll(self):
+    def stop(self):
+        """Signals the background threads to stop and closes the loop."""
+        self._stop_event.set()
         if self._threaded:
-            self._all_done_event.wait()
-            self._final_render_event.wait()
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop_thread.join(timeout=1.0)
+            self._render_thread.join(timeout=1.0)
+            if self._loop.is_running():
+                self._loop.stop()
+            self._loop.close()
+
+    def WaitAll(self, timeout: float = None):
+        """Blocks until all tracked jobs are finished."""
+        if self._threaded:
+            if not self._all_done_event_threadsafe.wait(timeout=timeout):
+                raise TimeoutError("WaitAll timed out")
+            if not self._final_render_event.wait(timeout=timeout):
+                raise TimeoutError("Final render timed out")
+        else:
+            # This shouldn't be called if not threaded and using await
+            raise RuntimeError("WaitAll is blocking and should only be used in threaded mode. Use await_all() instead.")
+
+    async def await_all(self):
+        """Asynchronously waits for all tracked jobs to finish."""
+        if self._threaded:
+            # We need a way to wait for the thread-safe event asynchronously
+            while not self._all_done_event_threadsafe.is_set():
+                await asyncio.sleep(0.05)
+        else:
+            await self._all_done_event.wait()
 
     def TrackJob(
         self, name: str, coroutine: Coroutine[None, None, None], optional: bool = False
     ):
-        cr_key = base64.b64encode(name.encode()).decode()
-
         with self._lock:
-            self._all_done_event.clear()
+            if self._threaded:
+                self._all_done_event_threadsafe.clear()
+            else:
+                self._all_done_event.clear()
             self._final_render_event.clear()
             self._was_done = False
-            self._active_tasks[cr_key] = time.time()
+            self._active_tasks[name] = time.time()
 
         async def _jobLogic():
             try:
                 await coroutine
             except Exception as e:
                 with self._lock:
-                    dec = base64.b64decode(cr_key.encode()).decode()
-                    start = self._active_tasks.get(cr_key, time.time())
+                    start = self._active_tasks.get(name, time.time())
                     delta = time.time() - start
-                    if optional:
-                        self._finished_tasks.append(
-                            (
-                                f"\033[93m[OPT FAIL]\033[0m {dec} ({type(e).__name__} {e})",
-                                delta,
-                            )
+                    status = "[OPT FAIL]" if optional else "[ERR]"
+                    color = "\033[93m" if optional else "\033[91m"
+                    self._finished_tasks.append(
+                        (
+                            f"{color}{status}\033[0m {name} ({type(e).__name__}: {e})",
+                            delta,
                         )
-                    else:
-                        self._finished_tasks.append(
-                            (
-                                f"\033[91m[ERR]\033[0m {dec} ({type(e).__name__} {e})",
-                                delta,
-                            )
-                        )
+                    )
             finally:
-                self._endTaskInternal(cr_key)
+                self._endTaskInternal(name)
 
         if self._threaded:
             asyncio.run_coroutine_threadsafe(_jobLogic(), self._loop)
         else:
-            self._loop.run_until_complete(_jobLogic())
+            self._loop.create_task(_jobLogic())
 
-    def TrackAndAwait(self, name: str, coroutine: Coroutine):
+    async def TrackAndAwait(self, name: str, coroutine: Coroutine):
+        """Tracks a job and waits for it to finish, returning the result or raising the exception."""
         result_ref = [None]
         exception_ref = [None]
 
@@ -88,7 +115,7 @@ class Vync:
                 raise
 
         self.TrackJob(name, _wrapper())
-        self.WaitAll()
+        await self.await_all()
 
         if exception_ref[0]:
             raise exception_ref[0]
@@ -96,35 +123,41 @@ class Vync:
 
     def _runSharedLoop(self):
         asyncio.set_event_loop(self._loop)
+        self._all_done_event = asyncio.Event()
+        self._all_done_event.set()
         self._loop.run_forever()
 
-    def _endTaskInternal(self, cr_key: str):
+    def _endTaskInternal(self, name: str):
         with self._lock:
-            if cr_key in self._active_tasks:
-                start_time = self._active_tasks.pop(cr_key)
-                name = base64.b64decode(cr_key.encode()).decode()
+            if name in self._active_tasks:
+                start_time = self._active_tasks.pop(name)
                 delta = time.time() - start_time
+                # Only add to finished if it hasn't been added by an error handler
                 if not any(name in f[0] for f in self._finished_tasks):
                     self._finished_tasks.append(
                         (f"\033[92m[FINISHED]\033[0m {name}", delta)
                     )
             if not self._active_tasks:
-                self._all_done_event.set()
+                if self._threaded:
+                    self._all_done_event_threadsafe.set()
+                else:
+                    self._all_done_event.set()
 
     def _renderLoop(self):
         last_line_count = 0
-        while True:
+        is_atty = sys.stdout.isatty()
+        
+        while not self._stop_event.is_set():
             with self._lock:
                 is_done = len(self._active_tasks) == 0
                 if is_done and self._was_done:
                     pass
-                else:
+                elif is_atty:
                     now = time.time()
                     lines = []
                     for status_name, duration in self._finished_tasks:
                         lines.append(f"{status_name}: {duration:.2f}s")
-                    for key, start_time in self._active_tasks.items():
-                        name = base64.b64decode(key.encode()).decode()
+                    for name, start_time in self._active_tasks.items():
                         lines.append(
                             f"\033[94m[ACTIVE]\033[0m {name}: {now - start_time:.2f}s"
                         )
@@ -145,4 +178,14 @@ class Vync:
                         self._was_done = False
 
                     sys.stdout.flush()
+                elif is_done and not self._was_done:
+                    # Non-interactive mode: just print finished tasks once
+                    for status_name, duration in self._finished_tasks:
+                        # Strip ANSI if not a TTY
+                        clean_status = status_name.replace("\033[92m", "").replace("\033[91m", "").replace("\033[93m", "").replace("\033[0m", "")
+                        print(f"{clean_status}: {duration:.2f}s")
+                    self._was_done = True
+                    self._finished_tasks.clear()
+                    self._final_render_event.set()
+
             time.sleep(0.1)

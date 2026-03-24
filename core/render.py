@@ -1,9 +1,19 @@
 import re
 
+# Pre-compiled regular expressions
+FILE_HEADER_RE = re.compile(r"^###\s+`?([^`]+?)`?\s*$")
+HEADER_RE = re.compile(r"^(##+)\s+(.*)")
+LINE_ANNOTATION_RE = re.compile(r"^\s*-\s*Line[s]?\s+(\d+)[^:]*:")
+BACKTICK_RE = re.compile(r"^(`+)(.*)")
+AGENTS_RE = re.compile(r"^\s*Agents:\s*(.*)")
+BOLD_RE = re.compile(r"\*\*(.*?)\*\*")
+ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)")
+CODE_INLINE_RE = re.compile(r"`(.*?)`")
+
 
 def setup_pygments() -> bool:
     try:
-        import pygments
+        import pygments  # noqa: F401
 
         return True
     except ImportError:
@@ -36,7 +46,7 @@ def render_markdown(text: str) -> str:
         current_line = lines[line_index]
 
         # Check for file header: ### `filename` or ### filename
-        file_header_match = re.match(r"^###\s+`?([^`]+?)`?\s*$", current_line)
+        file_header_match = FILE_HEADER_RE.match(current_line)
         if file_header_match:
             current_file_name = file_header_match.group(1).strip()
             current_language_extension = (
@@ -47,7 +57,7 @@ def render_markdown(text: str) -> str:
             continue
 
         # Check for regular headers: ## Header
-        header_match = re.match(r"^(##+)\s+(.*)", current_line)
+        header_match = HEADER_RE.match(current_line)
         if header_match:
             header_level = header_match.group(1)
             header_text = header_match.group(2)
@@ -56,9 +66,7 @@ def render_markdown(text: str) -> str:
             continue
 
         # Match ' - Line 123:', ' - Line 123-145:', ' - Line 255-256 and 330-331:', etc.
-        line_annotation_match = re.match(
-            r"^\s*-\s*Line[s]?\s+(\d+)[^:]*:", current_line
-        )
+        line_annotation_match = LINE_ANNOTATION_RE.match(current_line)
 
         has_next_line = line_index + 1 < len(lines)
         is_next_line_code_block = False
@@ -66,7 +74,7 @@ def render_markdown(text: str) -> str:
 
         if has_next_line:
             next_line = lines[line_index + 1].strip()
-            backtick_match = re.match(r"^(`+)(.*)", next_line)
+            backtick_match = BACKTICK_RE.match(next_line)
             if backtick_match:
                 is_next_line_code_block = True
 
@@ -129,7 +137,7 @@ def render_markdown(text: str) -> str:
                 line_index = code_line_index
             continue
 
-        agents_match = re.match(r"^\s*Agents:\s*(.*)", current_line)
+        agents_match = AGENTS_RE.match(current_line)
         if agents_match:
             rendered_lines.append(
                 f"  \033[33mAgents:\033[0m \033[1;34m{agents_match.group(1)}\033[0m"
@@ -138,11 +146,9 @@ def render_markdown(text: str) -> str:
             continue
 
         # Basic markdown formatting
-        formatted_line = re.sub(r"\*\*(.*?)\*\*", r"\033[1m\1\033[0m", current_line)
-        formatted_line = re.sub(
-            r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)", r"\033[3m\1\033[0m", formatted_line
-        )
-        formatted_line = re.sub(r"`(.*?)`", r"\033[32m\1\033[0m", formatted_line)
+        formatted_line = BOLD_RE.sub(r"\033[1m\1\033[0m", current_line)
+        formatted_line = ITALIC_RE.sub(r"\033[3m\1\033[0m", formatted_line)
+        formatted_line = CODE_INLINE_RE.sub(r"\033[32m\1\033[0m", formatted_line)
 
         rendered_lines.append(formatted_line)
         line_index += 1

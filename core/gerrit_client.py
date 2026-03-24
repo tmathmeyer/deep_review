@@ -33,7 +33,8 @@ class GerritClient:
                 with urllib.request.urlopen(req) as response:
                     return response.read()
             except urllib.error.HTTPError as e:
-                if e.code == 429 and attempt < max_retries - 1:
+                # Retry on 429 (Too Many Requests) or 5xx (Server Errors)
+                if (e.code == 429 or 500 <= e.code < 600) and attempt < max_retries - 1:
                     time.sleep(2**attempt)
                     continue
                 raise GerritAPIError(
@@ -41,11 +42,15 @@ class GerritClient:
                     status_code=e.code,
                     details=e.reason,
                 )
-            except Exception as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                # Retry on network-level errors
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)
                     continue
-                raise GerritAPIError(f"Failed to fetch {url}: {e}")
+                raise GerritAPIError(f"Network error fetching {url}: {e}")
+            except Exception as e:
+                # Don't retry on other exceptions (like ValueError, TypeError, etc.)
+                raise GerritAPIError(f"Unexpected error fetching {url}: {e}")
 
     def get_json(self, endpoint: str) -> Dict[str, Any]:
         """
@@ -138,7 +143,8 @@ class GerritClient:
                 # It's normal for some directories to not exist in older commits or if we guessed a path incorrectly
                 if e.code == 404:
                     return {"entries": []}
-                if e.code == 429 and attempt < max_retries - 1:
+                # Retry on 429 (Too Many Requests) or 5xx (Server Errors)
+                if (e.code == 429 or 500 <= e.code < 600) and attempt < max_retries - 1:
                     time.sleep(2**attempt)
                     continue
                 raise GerritAPIError(
@@ -146,8 +152,12 @@ class GerritClient:
                     status_code=e.code,
                     details=e.reason,
                 )
-            except Exception as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                # Retry on network-level errors
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)
                     continue
-                raise GerritAPIError(f"Failed to fetch {url}: {e}")
+                raise GerritAPIError(f"Network error fetching {url}: {e}")
+            except Exception as e:
+                # Don't retry on other exceptions (like ValueError, TypeError, etc.)
+                raise GerritAPIError(f"Unexpected error fetching {url}: {e}")

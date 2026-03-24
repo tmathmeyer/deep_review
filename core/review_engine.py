@@ -2,24 +2,17 @@
 Multi-threaded code review engine using Gemini Context Caching.
 """
 
-import os
-import time
-import threading
-import concurrent.futures
 from pathlib import Path
-from typing import List, Callable, Optional
+from typing import List
 
 from core.gemini_client import GeminiClient
 from core.models import AgentReview
 from core.utils import read_directory_context, save_file
+from vync import Vync
 
 COMMON_AGENT_INSTRUCTION = """
 **CRITICAL INSTRUCTION:** You must analyze ONLY the code changes (the lines added or modified in the diff). Do NOT report issues, bugs, or improvements for existing code that was not modified in this changelist, even if it is provided in the context.
 """
-
-
-from vync import Vync
-import asyncio
 
 
 async def run_review(
@@ -44,7 +37,8 @@ async def run_review(
                     agent_prompt += f"\n\n{COMMON_AGENT_INSTRUCTION}\n"
                     agents.append((file_path.stem, agent_prompt))
             except Exception as e:
-                print(f"Failed to read agent prompt {file_path.name}: {e}")
+                print(f"Error reading agent prompt {file_path.name}: {e}")
+                # We don't want to silently fail if an agent is unreadable
 
     if not agents:
         print("Error: No agent prompts (.md files) found.")
@@ -68,60 +62,60 @@ async def run_review(
 
     results: List[AgentReview] = []
 
-    for agent_name, prompt in agents:
+    try:
+        for agent_name, prompt in agents:
 
-        async def _run_agent(aname=agent_name, aprompt=prompt):
+            async def _run_agent(aname=agent_name, aprompt=prompt):
+                try:
+                    # Wrap the gemini call since it is synchronous
+                    response_text = await gemini_client.generate_content(
+                        model_name,
+                        aprompt,
+                        document_text if not cache_name else None,
+                        cache_name,
+                        0.2,  # temperature
+                        300,  # timeout
+                    )
+                    if response_text:
+                        results.append(
+                            AgentReview(
+                                agent_name=aname, response_text=response_text, status="Done"
+                            )
+                        )
+                    else:
+                        error_msg = "Empty response from Gemini"
+                        results.append(
+                            AgentReview(
+                                agent_name=aname,
+                                response_text=None,
+                                status="Failed",
+                                error_message=error_msg,
+                            )
+                        )
+                        raise ValueError(error_msg)
+                except Exception as e:
+                    if not any(r.agent_name == aname for r in results):
+                        results.append(
+                            AgentReview(
+                                agent_name=aname,
+                                response_text=None,
+                                status="Failed",
+                                error_message=str(e),
+                            )
+                        )
+                    raise
+
+            vync_app.TrackJob(f"Agent: {agent_name}", _run_agent(), optional=True)
+
+        await vync_app.await_all()
+
+    finally:
+        # 6. Cleanup cache
+        if cache_name:
             try:
-                # Wrap the gemini call since it is synchronous
-                response_text = await gemini_client.generate_content(
-                    model_name,
-                    aprompt,
-                    document_text if not cache_name else None,
-                    cache_name,
-                    0.2,  # temperature
-                    300,  # timeout
-                )
-                if response_text:
-                    results.append(
-                        AgentReview(
-                            agent_name=aname, response_text=response_text, status="Done"
-                        )
-                    )
-                else:
-                    results.append(
-                        AgentReview(
-                            agent_name=aname,
-                            response_text=None,
-                            status="Failed",
-                            error_message="Empty response",
-                        )
-                    )
-                    raise ValueError("Empty response")
+                await gemini_client.delete_cached_content(cache_name)
             except Exception as e:
-                if not any(r.agent_name == aname for r in results):
-                    results.append(
-                        AgentReview(
-                            agent_name=aname,
-                            response_text=None,
-                            status="Failed",
-                            error_message=str(e),
-                        )
-                    )
-                raise
-
-        vync_app.TrackJob(f"Agent: {agent_name}", _run_agent(), optional=True)
-
-    import base64
-
-    while any(
-        "Agent:" in base64.b64decode(k.encode()).decode()
-        for k in vync_app._active_tasks.keys()
-    ):
-        await asyncio.sleep(0.1)
-
-    # 6. Cleanup cache
-    if cache_name:
-        await gemini_client.delete_cached_content(cache_name)
+                print(f"Warning: Failed to delete cache {cache_name}: {e}")
 
     # 7. Aggregate and save results
     md_output = []

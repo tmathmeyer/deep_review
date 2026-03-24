@@ -6,7 +6,7 @@ import json
 import urllib.request
 import urllib.error
 import asyncio
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
 from core.exceptions import GeminiAPIError, ParseError
 

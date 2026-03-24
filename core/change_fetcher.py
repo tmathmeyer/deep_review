@@ -23,7 +23,7 @@ def parse_gerrit_url(url: str) -> tuple[str, str]:
         raise ValueError("Could not parse change ID from input.")
 
 
-def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
+async def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
     """
     Fetches change metadata, the patch diff, and the original files
     for a given Gerrit URL, saving them to output_dir.
@@ -34,7 +34,8 @@ def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Fetching change info...")
-    info_json = client.fetch_change_info(change_id)
+    # Use to_thread for the synchronous GerritClient calls
+    info_json = await asyncio.to_thread(client.fetch_change_info, change_id)
 
     project = info_json.get("project", "")
     numeric_id = info_json.get("_number", change_id)
@@ -105,26 +106,31 @@ def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
     vync_app.TrackJob("Fetch Diff", _fetch_diff())
 
     # Fetch changed files
-    files_data = client.fetch_changed_files(change_id)
+    files_data = await asyncio.to_thread(client.fetch_changed_files, change_id)
     modified_files = []
 
-    for file_path in files_data.keys():
-        if file_path == "/COMMIT_MSG":
-            continue
-        modified_files.append(file_path)
+    # Limit concurrency to avoid overwhelming the server
+    semaphore = asyncio.Semaphore(10)
 
-        async def _fetch_orig(fp=file_path):
+    async def _fetch_orig(fp):
+        async with semaphore:
             try:
                 original_bytes = await asyncio.to_thread(
                     client.fetch_original_file, change_id, fp
                 )
                 save_file(output_dir / fp, original_bytes)
             except Exception as e:
-                pass
+                print(f"Error fetching original file {fp}: {e}")
+                # We don't raise here to allow other files to be fetched, 
+                # but we've logged it.
 
-        vync_app.TrackJob(f"Fetch {file_path}", _fetch_orig())
+    for file_path in files_data.keys():
+        if file_path == "/COMMIT_MSG":
+            continue
+        modified_files.append(file_path)
+        vync_app.TrackJob(f"Fetch {file_path}", _fetch_orig(file_path))
 
-    vync_app.WaitAll()
+    await vync_app.await_all()
 
     # Discover and save project tree
     deep_dirs = set()
@@ -144,21 +150,21 @@ def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
     commit_id = current_rev if current_rev else "HEAD"
 
     try:
-        root_data = client.fetch_gitiles_directory(
+        root_data = await asyncio.to_thread(
+            client.fetch_gitiles_directory, 
             project, commit_id, "", gitiles_commit_url=change_info.gitiles_link
         )
         for entry in root_data.get("entries", []):
             if entry.get("type") == "tree":
                 shallow_dirs.add(entry.get("name"))
     except Exception as e:
-        pass
+        print(f"Warning: Failed to fetch root directory tree: {e}")
 
     shallow_dirs = shallow_dirs - deep_dirs
     shallow_dirs.add("")
 
-    for dir_path in sorted(list(shallow_dirs)):
-
-        async def _fetch_shallow(dp=dir_path):
+    async def _fetch_shallow(dp):
+        async with semaphore:
             try:
                 dir_data = await asyncio.to_thread(
                     client.fetch_gitiles_directory,
@@ -174,15 +180,13 @@ def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
                         full_path = f"{dp}/{file_name}" if dp else file_name
                         tree_files.add(full_path)
             except Exception as e:
-                pass
+                print(f"Warning: Failed to list directory {dp}: {e}")
 
-        vync_app.TrackJob(f"List Dir {dir_path}", _fetch_shallow())
+    for dir_path in sorted(list(shallow_dirs)):
+        vync_app.TrackJob(f"List Dir {dir_path}", _fetch_shallow(dir_path))
 
-    for dir_path in sorted(list(deep_dirs)):
-        if not dir_path:
-            continue
-
-        async def _fetch_deep(dp=dir_path):
+    async def _fetch_deep(dp):
+        async with semaphore:
             try:
                 dir_data = await asyncio.to_thread(
                     client.fetch_gitiles_directory,
@@ -199,11 +203,14 @@ def fetch_change(url: str, output_dir: Path, vync_app: Vync) -> ChangeInfo:
                         full_path = f"{dp}/{file_name}" if dp else file_name
                         tree_files.add(full_path)
             except Exception as e:
-                pass
+                print(f"Warning: Failed to list deep directory {dp}: {e}")
 
-        vync_app.TrackJob(f"List Deep Dir {dir_path}", _fetch_deep())
+    for dir_path in sorted(list(deep_dirs)):
+        if not dir_path:
+            continue
+        vync_app.TrackJob(f"List Deep Dir {dir_path}", _fetch_deep(dir_path))
 
-    vync_app.WaitAll()
+    await vync_app.await_all()
 
     if tree_files:
         tree_content = (

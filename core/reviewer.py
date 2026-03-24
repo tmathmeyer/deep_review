@@ -7,6 +7,7 @@ from core.context_analyzer import analyze_context
 from core.review_engine import run_review
 from core.review_summarizer import summarize_reviews
 from core.render import render_markdown
+from core.extra_context_fetcher import fetch_extra_context
 
 
 class Reviewer(ABC):
@@ -29,7 +30,12 @@ class Reviewer(ABC):
     async def deduce_more_context(
         self, change_info: ChangeInfo, output_dir: Path, vync_app: Vync
     ) -> None:
-        pass
+        agents_dir = self.get_reviewer_agents_dir()
+        analysis = await analyze_context(
+            output_dir, self.gemini_client, self.model_name, agents_dir
+        )
+        if analysis:
+            await fetch_extra_context(output_dir, change_info, analysis, vync_app)
 
     async def perform_analysis(
         self, change_info: ChangeInfo, output_dir: Path, vync_app: Vync

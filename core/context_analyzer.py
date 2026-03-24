@@ -9,7 +9,6 @@ from typing import Optional
 from core.gemini_client import GeminiClient
 from core.models import AnalysisResult
 from core.utils import read_directory_context, save_file
-from core.exceptions import ParseError
 
 
 async def analyze_context(
@@ -30,13 +29,14 @@ async def analyze_context(
                     agent_texts.append(
                         f"--- Code Review Agent: {file_path.name} ---\n{f.read()}\n"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to read agent prompt {file_path.name}: {e}")
 
     if agent_texts:
         document_text += "\n" + "\n".join(agent_texts)
 
     if not document_text.strip():
+        print("Error: Empty context for analysis.")
         return None
 
     # Load prompt
@@ -44,7 +44,8 @@ async def analyze_context(
     try:
         with open(prompt_path, "r", encoding="utf-8") as f:
             prompt = f.read()
-    except Exception:
+    except Exception as e:
+        print(f"Error: Failed to load analysis prompt: {e}")
         return None
 
     # We don't cache here because this is a one-off request

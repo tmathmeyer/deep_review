@@ -4,7 +4,7 @@ Utility functions for file system operations and context reading.
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 
 def save_file(file_path: Path, content: str | bytes) -> None:
@@ -67,13 +67,13 @@ def _append_file_content(
     """Helper to read a single file and append it to the context list."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            if len(lines) > max_lines:
+            content = f.read()
+            line_count = content.count("\n")
+            if line_count > max_lines:
                 print(f"Skipping {file_path} (more than {max_lines} lines)")
                 return
 
-            file_content = "".join(lines)
-            contents_list.append(f"--- File: {file_path} ---\n{file_content}\n")
+            contents_list.append(f"--- File: {file_path} ---\n{content}\n")
     except UnicodeDecodeError:
         print(f"Skipping {file_path} (binary or non-UTF-8 content)")
     except Exception as e:
