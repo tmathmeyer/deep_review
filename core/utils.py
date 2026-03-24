@@ -37,7 +37,7 @@ def read_directory_context(cl_dir: Path, max_lines: int = 5000) -> str:
     }
 
     # Files to push to the end of the context (recency bias)
-    end_files = {"diff.patch", "summary"}
+    end_files = {"diff.patch", "patch.diff", "summary"}
 
     for root, _, files in os.walk(cl_dir):
         for file in files:

@@ -24,10 +24,8 @@ async def fetch_extra_context(
 
     client = GerritClient(change_info.host)
 
-    print(f"Fetching {len(analysis.extra_context_files)} extra context files...")
-
     # Limit concurrency
-    semaphore = asyncio.Semaphore(10)
+    semaphore = asyncio.Semaphore(20)
 
     for file_path in analysis.extra_context_files:
 
@@ -40,8 +38,6 @@ async def fetch_extra_context(
                     local_file_path = cl_dir / fp
                     save_file(local_file_path, original_bytes)
                 except Exception as e:
-                    print(f"Warning: Failed to fetch extra context file {fp}: {e}")
+                    raise ValueError(f"Warning: Failed to fetch extra context file {fp}: {e}")
 
         vync_app.TrackJob(f"Fetch Extra: {file_path}", _fetch_extra())
-    
-    await vync_app.await_all()

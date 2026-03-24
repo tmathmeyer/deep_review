@@ -12,10 +12,10 @@ class Vync:
         self._finished_tasks: List[Tuple[str, float]] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
-        
+
         # asyncio.Event must be created in the loop it belongs to.
         # We'll initialize them later if threaded.
-        self._all_done_event: Any = None 
+        self._all_done_event: Any = None
         self._final_render_event = threading.Event()
         self._final_render_event.set()
         self._was_done = True
@@ -24,7 +24,7 @@ class Vync:
             self._loop = asyncio.new_event_loop()
             self._all_done_event_threadsafe = threading.Event()
             self._all_done_event_threadsafe.set()
-            
+
             self._loop_thread = threading.Thread(
                 target=self._runSharedLoop, daemon=True
             )
@@ -56,7 +56,9 @@ class Vync:
                 raise TimeoutError("Final render timed out")
         else:
             # This shouldn't be called if not threaded and using await
-            raise RuntimeError("WaitAll is blocking and should only be used in threaded mode. Use await_all() instead.")
+            raise RuntimeError(
+                "WaitAll is blocking and should only be used in threaded mode. Use await_all() instead."
+            )
 
     async def await_all(self):
         """Asynchronously waits for all tracked jobs to finish."""
@@ -146,7 +148,7 @@ class Vync:
     def _renderLoop(self):
         last_line_count = 0
         is_atty = sys.stdout.isatty()
-        
+
         while not self._stop_event.is_set():
             with self._lock:
                 is_done = len(self._active_tasks) == 0
@@ -182,10 +184,15 @@ class Vync:
                     # Non-interactive mode: just print finished tasks once
                     for status_name, duration in self._finished_tasks:
                         # Strip ANSI if not a TTY
-                        clean_status = status_name.replace("\033[92m", "").replace("\033[91m", "").replace("\033[93m", "").replace("\033[0m", "")
+                        clean_status = (
+                            status_name.replace("\033[92m", "")
+                            .replace("\033[91m", "")
+                            .replace("\033[93m", "")
+                            .replace("\033[0m", "")
+                        )
                         print(f"{clean_status}: {duration:.2f}s")
                     self._was_done = True
                     self._finished_tasks.clear()
                     self._final_render_event.set()
 
-            time.sleep(0.1)
+            time.sleep(1)
