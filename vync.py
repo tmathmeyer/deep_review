@@ -62,14 +62,17 @@ class Vync:
     """Asynchronously waits for all tracked jobs to finish."""
     if self._threaded:
       # We need a way to wait for the thread-safe event asynchronously
-      while not self._all_done_event_threadsafe.is_set() or not self._final_render_event.is_set():
+      while (
+        not self._all_done_event_threadsafe.is_set()
+        or not self._final_render_event.is_set()
+      ):
         await asyncio.sleep(0.05)
     else:
       await self._all_done_event.wait()
 
   def TrackJob(
     self, name: str, coroutine: Coroutine[None, None, None], optional: bool = False
-  ):
+  ) -> Any:
     with self._lock:
       if self._threaded:
         self._all_done_event_threadsafe.clear()
@@ -98,9 +101,20 @@ class Vync:
         self._endTaskInternal(name)
 
     if self._threaded:
-      asyncio.run_coroutine_threadsafe(_jobLogic(), self._loop)
+      return asyncio.run_coroutine_threadsafe(_jobLogic(), self._loop)
     else:
-      self._loop.create_task(_jobLogic())
+      return self._loop.create_task(_jobLogic())
+
+  async def JoinJobs(self, jobs: List[Any]):
+    """Asynchronously waits for a list of jobs returned by TrackJob to finish."""
+    if not jobs:
+      return
+    if self._threaded:
+      # jobs are concurrent.futures.Future, we need to wrap them for the current loop
+      await asyncio.gather(*[asyncio.wrap_future(j) for j in jobs])
+    else:
+      # jobs are asyncio.Task
+      await asyncio.gather(*jobs)
 
   async def TrackAndAwait(self, name: str, coroutine: Coroutine):
     """Tracks a job and waits for it to finish, returning the result or raising the exception."""

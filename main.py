@@ -33,7 +33,8 @@ def GetArguments() -> argparse.ArgumentParser:
   parser.add_argument(
     "--deterministic",
     action="store_true",
-    help="Do not run any non-deterministic code (no LLMs)")
+    help="Do not run any non-deterministic code (no LLMs)",
+  )
   return parser.parse_args()
 
 

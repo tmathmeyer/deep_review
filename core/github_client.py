@@ -41,12 +41,15 @@ class GitHubClient:
     """Helper to make a GET request and return JSON or raw bytes."""
     if self._session:
       return await self._do_request(self._session, url, headers)
-    
+
     async with aiohttp.ClientSession() as session:
       return await self._do_request(session, url, headers)
 
   async def _do_request(
-    self, session: aiohttp.ClientSession, url: str, headers: Optional[Dict[str, str]] = None
+    self,
+    session: aiohttp.ClientSession,
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
   ) -> Any:
     default_headers = {
       "Accept": "application/vnd.github.v3+json",

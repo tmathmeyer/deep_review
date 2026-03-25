@@ -7,9 +7,11 @@ import asyncio
 import base64
 import urllib.parse
 import aiohttp
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from core.exceptions import GerritAPIError, ParseError
+from vync import Vync
 
 
 class GerritClient:
@@ -40,7 +42,7 @@ class GerritClient:
     """Helper to make a raw GET request to the Gerrit API."""
     if self._session:
       return await self._do_request(self._session, endpoint)
-    
+
     async with aiohttp.ClientSession() as session:
       return await self._do_request(session, endpoint)
 
@@ -122,73 +124,21 @@ class GerritClient:
     endpoint = f"{change_id}/revisions/current/files/{encoded_path}/content?parent=1"
     return await self.get_base64_file(endpoint)
 
-  async def fetch_gitiles_directory(
-    self,
-    project: str,
-    commit_id: str,
-    dir_path: str,
-    gitiles_commit_url: str = "",
-    recursive: bool = False,
-  ) -> Dict[str, Any]:
-    """
-    Fetches the contents of a directory using the Gitiles REST API.
-    """
-    if self._session:
-      return await self._do_gitiles_request(self._session, project, commit_id, dir_path, gitiles_commit_url, recursive)
-    
-    async with aiohttp.ClientSession() as session:
-      return await self._do_gitiles_request(session, project, commit_id, dir_path, gitiles_commit_url, recursive)
+  async def fetch_original_files(
+    self, tasks: Vync, change_id: str, file_paths: list[str], output_dir: str | Path
+  ):
+    """Fetches multiple files concurrently and saves them to the output directory."""
+    from core.utils import save_file
 
-  async def _do_gitiles_request(
-    self,
-    session: aiohttp.ClientSession,
-    project: str,
-    commit_id: str,
-    dir_path: str,
-    gitiles_commit_url: str = "",
-    recursive: bool = False,
-  ) -> Dict[str, Any]:
-    encoded_dir = urllib.parse.quote(dir_path, safe="") if dir_path else ""
-    path_suffix = f"/{encoded_dir}/" if encoded_dir else "/"
-
-    if gitiles_commit_url:
-      url = f"{gitiles_commit_url.rstrip('/')}{path_suffix}?format=JSON"
-    else:
-      encoded_project = urllib.parse.quote(project, safe="")
-      url = f"https://{self.host}/plugins/gitiles/{encoded_project}/+/{commit_id}{path_suffix}?format=JSON"
-
-    if recursive:
-      url += "&recursive=1"
-
-    max_retries = 5
-    for attempt in range(max_retries):
+    async def _fetch_one(fp: str):
       try:
-        async with session.get(url) as response:
-          if response.status == 200:
-            raw_bytes = await response.read()
-            data_str = raw_bytes.decode("utf-8")
-            if data_str.startswith(")]}'"):
-              data_str = data_str[4:]
-            return json.loads(data_str)
-
-          if response.status == 404:
-            return {"entries": []}
-
-          if (
-            response.status == 429 or 500 <= response.status < 600
-          ) and attempt < max_retries - 1:
-            await asyncio.sleep(2**attempt)
-            continue
-
-          raise GerritAPIError(
-            f"HTTP Error {response.status} fetching {url}",
-            status_code=response.status,
-            details=await response.text(),
-          )
-      except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        if attempt < max_retries - 1:
-          await asyncio.sleep(2**attempt)
-          continue
-        raise GerritAPIError(f"Network error fetching {url}: {e}")
+        content = await self.fetch_original_file(change_id, fp)
+        save_file(Path(output_dir) / fp, content)
       except Exception as e:
-        raise GerritAPIError(f"Unexpected error fetching {url}: {e}")
+        print(f"Error fetching original file {fp}: {e}")
+
+    job_futures = []
+    for fp in file_paths:
+      job_futures.append(tasks.TrackJob(f"Fetch Original: {fp}", _fetch_one(fp)))
+
+    await tasks.JoinJobs(job_futures)

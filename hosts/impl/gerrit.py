@@ -1,4 +1,3 @@
-import asyncio
 import os
 import pathlib
 import re
@@ -10,6 +9,7 @@ from hosts.mixins.agents import Agentic
 from hosts.mixins.summary import Summarizer
 from hosts.mixins.console import ConsoleRenderer
 from core.gerrit_client import GerritClient
+from core.gitiles_client import GitilesClient
 from core.utils import save_file
 
 
@@ -29,6 +29,7 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
     self._change_id = change_id
     self._datadir = os.path.join("reviews", "gerrit", host, change_id)
     self._client = GerritClient(host)
+    self._gitiles = GitilesClient(host)
 
   def GetReviewDir(self) -> pathlib.Path:
     return pathlib.Path(self._datadir)
@@ -79,75 +80,23 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
     patch_bytes = await self._client.fetch_patch_diff(self._change_id, 20)
     save_file(self.GetReviewDir() / "patch.diff", patch_bytes)
 
-  async def _extract_base_files(self, project, current_rev, gitiles_link):
+  async def _extract_base_files(self, tasks):
     files_data = await self._client.fetch_changed_files(self._change_id)
-    modified_files = []
-    semaphore = asyncio.Semaphore(10)
+    modified_files = [fp for fp in files_data.keys() if fp != "/COMMIT_MSG"]
 
-    async def _fetch_orig(fp):
-      async with semaphore:
-        try:
-          original_bytes = await self._client.fetch_original_file(self._change_id, fp)
-          save_file(self.GetReviewDir() / fp, original_bytes)
-        except Exception as e:
-          print(f"Error fetching original file {fp}: {e}")
-
-    fetch_tasks = []
-    for file_path in files_data.keys():
-      if file_path == "/COMMIT_MSG":
-        continue
-      modified_files.append(file_path)
-      fetch_tasks.append(_fetch_orig(file_path))
-
-    await asyncio.gather(*fetch_tasks)
+    await self._client.fetch_original_files(
+      tasks, self._change_id, modified_files, self.GetReviewDir()
+    )
     return modified_files
 
   async def _fetch_project_tree(
-    self, project, current_rev, gitiles_link, modified_files
+    self, tasks, project, current_rev, gitiles_link, modified_files
   ):
-    deep_dirs = set()
-    for file_path in modified_files:
-      parts = file_path.split("/")
-      if len(parts) > 1:
-        deep_dirs.add("/".join(parts[:-1]))
-
-    shallow_dirs = set([""])
-    for dir_path in deep_dirs:
-      parts = dir_path.split("/")
-      for i in range(1, len(parts)):
-        shallow_dirs.add("/".join(parts[:i]))
-
-    tree_files = set()
     commit_id = current_rev if current_rev else "HEAD"
-    semaphore = asyncio.Semaphore(10)
-
-    async def _fetch_shallow_dir(dp):
-      async with semaphore:
-        try:
-          dir_data = await self._client.fetch_gitiles_directory(
-            project,
-            commit_id,
-            dp,
-            gitiles_link,
-          )
-          entries = dir_data.get("entries", [])
-          for entry in entries:
-            if entry.get("type") == "blob":
-              file_name = entry.get("name")
-              full_path = f"{dp}/{file_name}" if dp else file_name
-              tree_files.add(full_path)
-        except Exception:
-          pass
-
-    dir_tasks = [(_fetch_shallow_dir(dp)) for dp in shallow_dirs]
-    await asyncio.gather(*dir_tasks)
-
-    if tree_files:
-      tree_content = (
-        "Project files near the changed files:\n\n"
-        + "\n".join(sorted(list(tree_files)))
-        + "\n"
-      )
+    tree_content = await self._gitiles.fetch_project_tree(
+      tasks, project, commit_id, modified_files, gitiles_link
+    )
+    if tree_content:
       save_file(self.GetReviewDir() / "project_tree", tree_content)
 
   async def FetchChange(self, tasks):
@@ -169,11 +118,9 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
 
     # 3. Fetch Files and Tree
     async def _fetch_files_and_tree():
-      modified_files = await self._extract_base_files(
-        project, current_rev, gitiles_link
-      )
+      modified_files = await self._extract_base_files(tasks)
       await self._fetch_project_tree(
-        project, current_rev, gitiles_link, modified_files
+        tasks, project, current_rev, gitiles_link, modified_files
       )
 
     tasks.TrackJob("Fetch Files and Tree", _fetch_files_and_tree())
