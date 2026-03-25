@@ -1,3 +1,4 @@
+from pathlib import Path
 from core.review_summarizer import summarize_reviews
 from core.utils import save_file
 

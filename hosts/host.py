@@ -1,3 +1,4 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -12,6 +13,8 @@ class Host(ABC):
     self._args = args
 
   def Steps(self):
+    if self._args.deterministic:
+      return [("Fetch Change", self.FetchChange)]
     return [
       ("Fetch Change", self.FetchChange),
       ("Expand Context", self.FindAdditionalContext),

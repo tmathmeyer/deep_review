@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import List, Coroutine, Tuple
 
 from core.gemini_client import GeminiClient
-from core.models import AgentReview
 from core.utils import read_directory_context, save_file
 
 
@@ -84,5 +83,5 @@ async def _run_agent_review(
   else:
     save_file(
       file_path,
-      f"*(Agent failed to generate review: Empty response from Gemini)*",
+      "*(Agent failed to generate review: Empty response from Gemini)*",
     )

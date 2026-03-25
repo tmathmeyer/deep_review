@@ -30,6 +30,10 @@ def GetArguments() -> argparse.ArgumentParser:
     action="store_true",
     help="Use mock agents and gemini-3.1-flash-lite-preview for faster testing",
   )
+  parser.add_argument(
+    "--deterministic",
+    action="store_true",
+    help="Do not run any non-deterministic code (no LLMs)")
   return parser.parse_args()
 
 

@@ -3,7 +3,6 @@ import os
 import pathlib
 import re
 import shutil
-import aiohttp
 
 from hosts.host import Host
 from hosts.mixins.context import DeducesContext
@@ -137,7 +136,7 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
               file_name = entry.get("name")
               full_path = f"{dp}/{file_name}" if dp else file_name
               tree_files.add(full_path)
-        except:
+        except Exception:
           pass
 
     dir_tasks = [(_fetch_shallow_dir(dp)) for dp in shallow_dirs]
@@ -156,30 +155,25 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
       shutil.rmtree(self._datadir)
     os.makedirs(self._datadir, exist_ok=True)
 
-    async with aiohttp.ClientSession() as session:
-      self._client.set_session(session)
+    # 1. Fetch Change Info
+    info_json = await self._client.fetch_change_info(self._change_id)
+    numeric_id = info_json.get("_number", self._change_id)
+    current_rev = info_json.get("current_revision", "")
 
-      # 1. Fetch Change Info
-      info_json = await self._client.fetch_change_info(self._change_id)
-      numeric_id = info_json.get("_number", self._change_id)
-      current_rev = info_json.get("current_revision", "")
+    project, gitiles_link, current_rev = self._save_commit_info(
+      info_json, numeric_id, current_rev
+    )
 
-      project, gitiles_link, current_rev = self._save_commit_info(
-        info_json, numeric_id, current_rev
+    # 2. Fetch Diff
+    tasks.TrackJob("Fetch Diff", self._save_diff())
+
+    # 3. Fetch Files and Tree
+    async def _fetch_files_and_tree():
+      modified_files = await self._extract_base_files(
+        project, current_rev, gitiles_link
+      )
+      await self._fetch_project_tree(
+        project, current_rev, gitiles_link, modified_files
       )
 
-      # 2. Fetch Diff
-      tasks.TrackJob("Fetch Diff", self._save_diff())
-
-      # 3. Fetch Files and Tree
-      async def _fetch_files_and_tree():
-        modified_files = await self._extract_base_files(
-          project, current_rev, gitiles_link
-        )
-        await self._fetch_project_tree(
-          project, current_rev, gitiles_link, modified_files
-        )
-
-      tasks.TrackJob("Fetch Files and Tree", _fetch_files_and_tree())
-
-      await tasks.await_all()
+    tasks.TrackJob("Fetch Files and Tree", _fetch_files_and_tree())

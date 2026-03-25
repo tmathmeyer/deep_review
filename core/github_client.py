@@ -1,8 +1,7 @@
 """
-GitHub API client using aiohttp.
+GitHub API client using aiohttp as an async context manager.
 """
 
-import json
 import asyncio
 import aiohttp
 from typing import Dict, Any, List, Optional
@@ -16,24 +15,39 @@ class GitHubClient:
     Initializes the client.
     :param owner: GitHub repo owner.
     :param repo: GitHub repo name.
-    :param session: Optional aiohttp.ClientSession.
+    :param session: Optional external aiohttp.ClientSession.
     """
     self.owner = owner
     self.repo = repo
     self.base_url = f"https://api.github.com/repos/{owner}/{repo}"
     self._session = session
+    self._own_session = False
 
-  def set_session(self, session: aiohttp.ClientSession):
-    """Sets the active aiohttp session for this client."""
-    self._session = session
+  async def __aenter__(self) -> "GitHubClient":
+    if not self._session:
+      self._session = aiohttp.ClientSession()
+      self._own_session = True
+    return self
+
+  async def __aexit__(self, exc_type, exc_val, exc_tb):
+    if self._own_session and self._session:
+      await self._session.close()
+      self._session = None
+      self._own_session = False
 
   async def _make_request(
     self, url: str, headers: Optional[Dict[str, str]] = None
   ) -> Any:
     """Helper to make a GET request and return JSON or raw bytes."""
-    if not self._session:
-      raise RuntimeError("GitHubClient session is not set. Call set_session() first.")
+    if self._session:
+      return await self._do_request(self._session, url, headers)
+    
+    async with aiohttp.ClientSession() as session:
+      return await self._do_request(session, url, headers)
 
+  async def _do_request(
+    self, session: aiohttp.ClientSession, url: str, headers: Optional[Dict[str, str]] = None
+  ) -> Any:
     default_headers = {
       "Accept": "application/vnd.github.v3+json",
       "User-Agent": "deep-review",
@@ -44,7 +58,7 @@ class GitHubClient:
     max_retries = 3
     for attempt in range(max_retries):
       try:
-        async with self._session.get(url, headers=default_headers) as response:
+        async with session.get(url, headers=default_headers) as response:
           if response.status == 200:
             if "application/json" in response.headers.get("Content-Type", ""):
               return await response.json()
@@ -58,7 +72,7 @@ class GitHubClient:
 
           text = await response.text()
           raise Exception(f"GitHub API Error {response.status}: {text}")
-      except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+      except (aiohttp.ClientError, asyncio.TimeoutError):
         if attempt < max_retries - 1:
           await asyncio.sleep(2**attempt)
           continue

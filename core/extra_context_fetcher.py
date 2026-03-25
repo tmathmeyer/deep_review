@@ -4,7 +4,6 @@ Fetches extra context files from Gerrit using aiohttp.
 
 from pathlib import Path
 import asyncio
-import aiohttp
 
 from core.gerrit_client import GerritClient
 from core.models import AnalysisResult, ChangeInfo
@@ -22,23 +21,19 @@ async def fetch_extra_context(
     print("No extra context files to download.")
     return
 
-  async with aiohttp.ClientSession() as session:
-    client = GerritClient(change_info.host, session=session)
+  client = GerritClient(change_info.host)
+  # Limit concurrency
+  semaphore = asyncio.Semaphore(20)
 
-    # Limit concurrency
-    semaphore = asyncio.Semaphore(20)
+  for file_path in analysis.extra_context_files:
 
-    for file_path in analysis.extra_context_files:
+    async def _fetch_extra(fp=file_path):
+      async with semaphore:
+        try:
+          original_bytes = await client.fetch_original_file(change_info.cl_id, fp)
+          local_file_path = cl_dir / fp
+          save_file(local_file_path, original_bytes)
+        except Exception as e:
+          print(f"Warning: Failed to fetch extra context file {fp}: {e}")
 
-      async def _fetch_extra(fp=file_path):
-        async with semaphore:
-          try:
-            original_bytes = await client.fetch_original_file(change_info.cl_id, fp)
-            local_file_path = cl_dir / fp
-            save_file(local_file_path, original_bytes)
-          except Exception as e:
-            print(f"Warning: Failed to fetch extra context file {fp}: {e}")
-
-      vync_app.TrackJob(f"Fetch Extra: {file_path}", _fetch_extra())
-
-    await vync_app.await_all()
+    vync_app.TrackJob(f"Fetch Extra: {file_path}", _fetch_extra())

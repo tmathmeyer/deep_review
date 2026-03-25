@@ -62,7 +62,7 @@ class Vync:
     """Asynchronously waits for all tracked jobs to finish."""
     if self._threaded:
       # We need a way to wait for the thread-safe event asynchronously
-      while not self._all_done_event_threadsafe.is_set():
+      while not self._all_done_event_threadsafe.is_set() or not self._final_render_event.is_set():
         await asyncio.sleep(0.05)
     else:
       await self._all_done_event.wait()
@@ -189,4 +189,4 @@ class Vync:
           self._finished_tasks.clear()
           self._final_render_event.set()
 
-      time.sleep(1)
+      time.sleep(0.1)

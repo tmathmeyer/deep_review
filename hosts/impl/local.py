@@ -36,7 +36,7 @@ class Local(NoContext, Agentic, Summarizer, ConsoleRenderer, Host):
       return f"{self._sha}^"
     try:
       return _Git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    except:
+    except Exception:
       return "HEAD"
 
   def _save_diff(self, archive_ref: str, patch_path: str):

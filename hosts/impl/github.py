@@ -1,10 +1,8 @@
 import asyncio
-import json
 import os
 import pathlib
 import re
 import shutil
-import aiohttp
 
 from hosts.host import Host
 from hosts.mixins.context import NoContext
@@ -78,18 +76,13 @@ class GitHub(NoContext, Agentic, Summarizer, ConsoleRenderer, Host):
       shutil.rmtree(self._datadir)
     os.makedirs(self._datadir, exist_ok=True)
 
-    async with aiohttp.ClientSession() as session:
-      self._client.set_session(session)
+    # 1. Fetch PR Info
+    pr_data = await self._client.fetch_pr_info(self._pr_id)
 
-      # 1. Fetch PR Info
-      pr_data = await self._client.fetch_pr_info(self._pr_id)
+    self._save_commit_info(pr_data)
 
-      self._save_commit_info(pr_data)
+    # 2. Fetch Diff
+    tasks.TrackJob("Fetch PR Diff", self._save_diff(pr_data))
 
-      # 2. Fetch Diff
-      tasks.TrackJob("Fetch PR Diff", self._save_diff(pr_data))
-
-      # 3. Fetch Files
-      tasks.TrackJob("Fetch PR Files", self._extract_base_files(pr_data))
-
-      await tasks.await_all()
+    # 3. Fetch Files
+    tasks.TrackJob("Fetch PR Files", self._extract_base_files(pr_data))
