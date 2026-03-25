@@ -3,6 +3,7 @@ import os
 import pathlib
 import re
 import shutil
+import aiohttp
 
 from hosts.host import Host
 from hosts.mixins.context import DeducesContext
@@ -76,24 +77,18 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
     return project, gitiles_link, current_rev
 
   async def _save_diff(self):
-    patch_bytes = await asyncio.to_thread(
-      self._client.fetch_patch_diff, self._change_id, 20
-    )
+    patch_bytes = await self._client.fetch_patch_diff(self._change_id, 20)
     save_file(self.GetReviewDir() / "patch.diff", patch_bytes)
 
   async def _extract_base_files(self, project, current_rev, gitiles_link):
-    files_data = await asyncio.to_thread(
-      self._client.fetch_changed_files, self._change_id
-    )
+    files_data = await self._client.fetch_changed_files(self._change_id)
     modified_files = []
     semaphore = asyncio.Semaphore(10)
 
     async def _fetch_orig(fp):
       async with semaphore:
         try:
-          original_bytes = await asyncio.to_thread(
-            self._client.fetch_original_file, self._change_id, fp
-          )
+          original_bytes = await self._client.fetch_original_file(self._change_id, fp)
           save_file(self.GetReviewDir() / fp, original_bytes)
         except Exception as e:
           print(f"Error fetching original file {fp}: {e}")
@@ -130,8 +125,7 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
     async def _fetch_shallow_dir(dp):
       async with semaphore:
         try:
-          dir_data = await asyncio.to_thread(
-            self._client.fetch_gitiles_directory,
+          dir_data = await self._client.fetch_gitiles_directory(
             project,
             commit_id,
             dp,
@@ -162,23 +156,30 @@ class Gerrit(DeducesContext, Agentic, Summarizer, ConsoleRenderer, Host):
       shutil.rmtree(self._datadir)
     os.makedirs(self._datadir, exist_ok=True)
 
-    # 1. Fetch Change Info
-    info_json = await asyncio.to_thread(self._client.fetch_change_info, self._change_id)
-    numeric_id = info_json.get("_number", self._change_id)
-    current_rev = info_json.get("current_revision", "")
+    async with aiohttp.ClientSession() as session:
+      self._client.set_session(session)
 
-    project, gitiles_link, current_rev = self._save_commit_info(
-      info_json, numeric_id, current_rev
-    )
+      # 1. Fetch Change Info
+      info_json = await self._client.fetch_change_info(self._change_id)
+      numeric_id = info_json.get("_number", self._change_id)
+      current_rev = info_json.get("current_revision", "")
 
-    # 2. Fetch Diff
-    tasks.TrackJob("Fetch Diff", self._save_diff())
-
-    # 3. Fetch Files and Tree
-    async def _fetch_files_and_tree():
-      modified_files = await self._extract_base_files(
-        project, current_rev, gitiles_link
+      project, gitiles_link, current_rev = self._save_commit_info(
+        info_json, numeric_id, current_rev
       )
-      await self._fetch_project_tree(project, current_rev, gitiles_link, modified_files)
 
-    tasks.TrackJob("Fetch Files and Tree", _fetch_files_and_tree())
+      # 2. Fetch Diff
+      tasks.TrackJob("Fetch Diff", self._save_diff())
+
+      # 3. Fetch Files and Tree
+      async def _fetch_files_and_tree():
+        modified_files = await self._extract_base_files(
+          project, current_rev, gitiles_link
+        )
+        await self._fetch_project_tree(
+          project, current_rev, gitiles_link, modified_files
+        )
+
+      tasks.TrackJob("Fetch Files and Tree", _fetch_files_and_tree())
+
+      await tasks.await_all()

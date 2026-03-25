@@ -1,63 +1,73 @@
 """
-Gerrit API client.
+Gerrit API client using aiohttp.
 """
 
 import json
-import time
+import asyncio
 import base64
 import urllib.parse
-import urllib.request
-import urllib.error
-from typing import Dict, Any
+import aiohttp
+from typing import Dict, Any, Optional
 
 from core.exceptions import GerritAPIError, ParseError
 
 
 class GerritClient:
-  def __init__(self, host: str):
+  def __init__(self, host: str, session: Optional[aiohttp.ClientSession] = None):
     """
     Initializes the client.
     :param host: e.g., 'chromium-review.googlesource.com'
+    :param session: Optional aiohttp.ClientSession.
     """
     self.host = host
     self.base_url = f"https://{self.host}/changes"
+    self._session = session
 
-  def _make_request(self, endpoint: str) -> bytes:
+  def set_session(self, session: aiohttp.ClientSession):
+    """Sets the active aiohttp session for this client."""
+    self._session = session
+
+  async def _make_request(self, endpoint: str) -> bytes:
     """Helper to make a raw GET request to the Gerrit API."""
+    if not self._session:
+      raise RuntimeError("GerritClient session is not set. Call set_session() first.")
+
     url = f"{self.base_url}/{endpoint}"
 
-    req = urllib.request.Request(url)
     max_retries = 5
     for attempt in range(max_retries):
       try:
-        with urllib.request.urlopen(req) as response:
-          return response.read()
-      except urllib.error.HTTPError as e:
-        # Retry on 429 (Too Many Requests) or 5xx (Server Errors)
-        if (e.code == 429 or 500 <= e.code < 600) and attempt < max_retries - 1:
-          time.sleep(2**attempt)
-          continue
-        raise GerritAPIError(
-          f"HTTP Error {e.code} fetching {url}: {e.reason}",
-          status_code=e.code,
-          details=e.reason,
-        )
-      except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        async with self._session.get(url) as response:
+          if response.status == 200:
+            return await response.read()
+
+          # Retry on 429 (Too Many Requests) or 5xx (Server Errors)
+          if (
+            response.status == 429 or 500 <= response.status < 600
+          ) and attempt < max_retries - 1:
+            await asyncio.sleep(2**attempt)
+            continue
+
+          raise GerritAPIError(
+            f"HTTP Error {response.status} fetching {url}",
+            status_code=response.status,
+            details=await response.text(),
+          )
+      except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         # Retry on network-level errors
         if attempt < max_retries - 1:
-          time.sleep(2**attempt)
+          await asyncio.sleep(2**attempt)
           continue
         raise GerritAPIError(f"Network error fetching {url}: {e}")
       except Exception as e:
-        # Don't retry on other exceptions (like ValueError, TypeError, etc.)
         raise GerritAPIError(f"Unexpected error fetching {url}: {e}")
 
-  def get_json(self, endpoint: str) -> Dict[str, Any]:
+  async def get_json(self, endpoint: str) -> Dict[str, Any]:
     """
     Fetches data from Gerrit and parses the JSON.
     Automatically strips the XSSI magic string `)]}'`.
     """
-    raw_bytes = self._make_request(endpoint)
+    raw_bytes = await self._make_request(endpoint)
     try:
       data_str = raw_bytes.decode("utf-8")
       if data_str.startswith(")]}'"):
@@ -68,39 +78,38 @@ class GerritClient:
     except Exception as e:
       raise ParseError(f"Failed to decode Gerrit response: {e}")
 
-  def get_base64_file(self, endpoint: str) -> bytes:
+  async def get_base64_file(self, endpoint: str) -> bytes:
     """
     Fetches a base64 encoded response from Gerrit and decodes it to raw bytes.
-    Used for fetching patch diffs and file contents.
     """
-    encoded_data = self._make_request(endpoint)
+    encoded_data = await self._make_request(endpoint)
     try:
       return base64.b64decode(encoded_data)
     except Exception as e:
       raise ParseError(f"Failed to decode base64 data from Gerrit: {e}")
 
-  def fetch_change_info(self, change_id: str) -> Dict[str, Any]:
+  async def fetch_change_info(self, change_id: str) -> Dict[str, Any]:
     """Fetches metadata about a specific CL."""
     endpoint = f"{change_id}?o=CURRENT_REVISION&o=CURRENT_COMMIT&o=WEB_LINKS"
-    return self.get_json(endpoint)
+    return await self.get_json(endpoint)
 
-  def fetch_changed_files(self, change_id: str) -> Dict[str, Any]:
+  async def fetch_changed_files(self, change_id: str) -> Dict[str, Any]:
     """Returns the list of files modified in the current revision."""
     endpoint = f"{change_id}/revisions/current/files/"
-    return self.get_json(endpoint)
+    return await self.get_json(endpoint)
 
-  def fetch_patch_diff(self, change_id: str, context_lines: int = 20) -> bytes:
+  async def fetch_patch_diff(self, change_id: str, context_lines: int = 20) -> bytes:
     """Downloads the full unified diff for the current revision."""
     endpoint = f"{change_id}/revisions/current/patch?context={context_lines}"
-    return self.get_base64_file(endpoint)
+    return await self.get_base64_file(endpoint)
 
-  def fetch_original_file(self, change_id: str, file_path: str) -> bytes:
+  async def fetch_original_file(self, change_id: str, file_path: str) -> bytes:
     """Downloads the original file content from the base commit (parent=1)."""
     encoded_path = urllib.parse.quote(file_path, safe="")
     endpoint = f"{change_id}/revisions/current/files/{encoded_path}/content?parent=1"
-    return self.get_base64_file(endpoint)
+    return await self.get_base64_file(endpoint)
 
-  def fetch_gitiles_directory(
+  async def fetch_gitiles_directory(
     self,
     project: str,
     commit_id: str,
@@ -110,52 +119,51 @@ class GerritClient:
   ) -> Dict[str, Any]:
     """
     Fetches the contents of a directory using the Gitiles REST API.
-    dir_path should be empty string for root, or a path like 'src/main'.
     """
+    if not self._session:
+      raise RuntimeError("GerritClient session is not set. Call set_session() first.")
+
     encoded_dir = urllib.parse.quote(dir_path, safe="") if dir_path else ""
-    # Important: Gitiles requires a trailing slash to return the directory entries
-    # instead of just returning the commit info for the root.
     path_suffix = f"/{encoded_dir}/" if encoded_dir else "/"
 
     if gitiles_commit_url:
       url = f"{gitiles_commit_url.rstrip('/')}{path_suffix}?format=JSON"
     else:
-      # Fallback to Gerrit plugin path if no Gitiles link is provided
       encoded_project = urllib.parse.quote(project, safe="")
       url = f"https://{self.host}/plugins/gitiles/{encoded_project}/+/{commit_id}{path_suffix}?format=JSON"
 
     if recursive:
       url += "&recursive=1"
 
-    req = urllib.request.Request(url)
     max_retries = 5
     for attempt in range(max_retries):
       try:
-        with urllib.request.urlopen(req) as response:
-          raw_bytes = response.read()
-          data_str = raw_bytes.decode("utf-8")
-          if data_str.startswith(")]}'"):
-            data_str = data_str[4:]
-          return json.loads(data_str)
-      except urllib.error.HTTPError as e:
-        # It's normal for some directories to not exist in older commits or if we guessed a path incorrectly
-        if e.code == 404:
-          return {"entries": []}
-        # Retry on 429 (Too Many Requests) or 5xx (Server Errors)
-        if (e.code == 429 or 500 <= e.code < 600) and attempt < max_retries - 1:
-          time.sleep(2**attempt)
-          continue
-        raise GerritAPIError(
-          f"HTTP Error {e.code} fetching {url}: {e.reason}",
-          status_code=e.code,
-          details=e.reason,
-        )
-      except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        # Retry on network-level errors
+        async with self._session.get(url) as response:
+          if response.status == 200:
+            raw_bytes = await response.read()
+            data_str = raw_bytes.decode("utf-8")
+            if data_str.startswith(")]}'"):
+              data_str = data_str[4:]
+            return json.loads(data_str)
+
+          if response.status == 404:
+            return {"entries": []}
+
+          if (
+            response.status == 429 or 500 <= response.status < 600
+          ) and attempt < max_retries - 1:
+            await asyncio.sleep(2**attempt)
+            continue
+
+          raise GerritAPIError(
+            f"HTTP Error {response.status} fetching {url}",
+            status_code=response.status,
+            details=await response.text(),
+          )
+      except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         if attempt < max_retries - 1:
-          time.sleep(2**attempt)
+          await asyncio.sleep(2**attempt)
           continue
         raise GerritAPIError(f"Network error fetching {url}: {e}")
       except Exception as e:
-        # Don't retry on other exceptions (like ValueError, TypeError, etc.)
         raise GerritAPIError(f"Unexpected error fetching {url}: {e}")
