@@ -6,8 +6,8 @@ from hosts.impl.gerrit import Gerrit
 
 
 def GetCodeHosts() -> [Host]:
-    return [
-        Local,
-        GitHub,
-        Gerrit,
-    ]
+  return [
+    Local,
+    GitHub,
+    Gerrit,
+  ]

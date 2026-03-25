@@ -5,3 +5,6 @@ version = "0.1.0"
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.ruff]
+indent-width = 2
